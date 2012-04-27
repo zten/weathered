@@ -1,7 +1,7 @@
 package weathered;
 
 import com.mongodb.casbah.Imports._
-import java.io.{FileInputStream, FileReader, BufferedReader}
+import java.io.FileInputStream
 import org.apache.log4j.Logger
 
 /**
