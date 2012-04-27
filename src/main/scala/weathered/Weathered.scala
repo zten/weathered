@@ -13,10 +13,7 @@ object Weathered {
   val log = Logger.getLogger("Weathered")
 
   def main(args:Array[String]) {
-    val mongo = MongoConnection()
-
-    val db = mongo("weatheredTest")
-    val coll = db("observationTest")
+    val coll = MongoConnection()("weatheredTest")("observationTest")
 
     io.Source.fromInputStream(new FileInputStream(args(0))).getLines().foreach(line => {
       val list = line.split("\\s+").map(s => Integer.valueOf(s))
@@ -40,9 +37,7 @@ object Weathered {
       docBuilder += "liquidprecipdepth_hour" -> list(10)
       docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
-      val doc = docBuilder.result()
-
-      coll.save(doc)
+      coll.save(docBuilder.result())
     })
 
     log.info("observations recorded from input file")
