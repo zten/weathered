@@ -9,11 +9,35 @@ import org.apache.log4j.Logger
  * Or maybe it's not the most fantabulous.
  *
  */
-object Weathered {
-  val log = Logger.getLogger("Weathered")
+object LoadISDFile {
+  val log = Logger.getLogger(this.toString)
 
   def main(args:Array[String]) {
-    val coll = MongoConnection()("weatheredTest")("observationTest")
+    if (args.length == 0) {
+      println("need to specify a filename for an ISD lite file")
+      System.exit(1)
+    }
+
+    val nameComponents = args(0).split("-")
+    if (nameComponents.length != 3) {
+      println("ISD file name should fit the format <USAF>-<WBAN>-<year>")
+      System.exit(1)
+    }
+
+    val db = MongoConnection()("weathered")
+    val stations = db("stations")
+    val coll = db("observations" + nameComponents(2))
+
+    val usaf = nameComponents(0)
+    val wban = nameComponents(1)
+
+    val station = stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
+      case Some(x) => x
+      case None => {
+        println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
+        System.exit(1)
+      }
+    }
 
     io.Source.fromInputStream(new FileInputStream(args(0))).getLines().foreach(line => {
       val list = line.split("\\s+").map(s => Integer.valueOf(s))
@@ -24,6 +48,7 @@ object Weathered {
       }
 
       val docBuilder = MongoDBObject.newBuilder
+      docBuilder += "station" -> station
       docBuilder += "year" -> list(0)
       docBuilder += "month" -> list(1)
       docBuilder += "day" -> list(2)
