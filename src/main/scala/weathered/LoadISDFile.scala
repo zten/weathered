@@ -50,6 +50,7 @@ object LoadISDFile {
 
 
       val docBuilder = MongoDBObject.newBuilder
+      // Forgot months start at 0...
       val date = new GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
       docBuilder += "station" -> station
       docBuilder += "date" -> date
