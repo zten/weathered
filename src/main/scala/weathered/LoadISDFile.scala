@@ -3,6 +3,7 @@ package weathered;
 import com.mongodb.casbah.Imports._
 import java.io.FileInputStream
 import org.apache.log4j.Logger
+import java.util.GregorianCalendar
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -47,12 +48,11 @@ object LoadISDFile {
         System.exit(1)
       }
 
+
       val docBuilder = MongoDBObject.newBuilder
+      val date = new GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
       docBuilder += "station" -> station
-      docBuilder += "year" -> list(0)
-      docBuilder += "month" -> list(1)
-      docBuilder += "day" -> list(2)
-      docBuilder += "hour" -> list(3)
+      docBuilder += "date" -> date
       docBuilder += "airtemp" -> list(4)
       docBuilder += "dewpointtemp" -> list(5)
       docBuilder += "sealevelpressure" -> list(6)

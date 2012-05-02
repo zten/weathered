@@ -78,7 +78,5 @@ class CSVWrapper(private var file:File) extends Iterator[Array[String]] {
     else true
   }
 
-  def next() = {
-    nextLine
-  }
+  def next() = nextLine
 }
