@@ -45,10 +45,8 @@ object LoadStations {
         station += "fipsCountry" -> arr(4)
         station += "state" -> arr(5)
         station += "callsign" -> arr(6)
-        station += "latitude" -> arr(7)
-        station += "longitude" -> arr(8)
+        station += "location" -> (parseNumber(arr(7), 1000), parseNumber(arr(8), 1000))
         station += "elevation" -> arr(9)
-
         coll.save(station.result())
       }
 
@@ -57,6 +55,25 @@ object LoadStations {
 
     log.info("stations loaded")
 
+  }
+
+  def parseNumber(signedNum:String, divisor:Float):Float = {
+    if (signedNum.length == 0) {
+      0.0f
+    } else {
+      var neg = false
+      if (signedNum.substring(0, 1).equals("-")) {
+        neg = true
+      }
+
+      val num = signedNum.substring(1).toFloat
+      val divided = num / divisor
+      if (neg) {
+        0.0f - divided
+      } else {
+        divided
+      }
+    }
   }
 
 }
