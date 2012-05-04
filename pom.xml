@@ -61,6 +61,7 @@
     <build>
         <plugins>
             <plugin>
+                <version>2.15.2</version>
                 <groupId>org.scala-tools</groupId>
                 <artifactId>maven-scala-plugin</artifactId>
                 <executions>
@@ -76,6 +77,7 @@
                 </configuration>
             </plugin>
             <plugin>
+                <version>2.4</version>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <source>1.6</source>
@@ -110,6 +112,7 @@
     <reporting>
         <plugins>
             <plugin>
+                <version>2.15.2</version>
                 <groupId>org.scala-tools</groupId>
                 <artifactId>maven-scala-plugin</artifactId>
                 <configuration>
