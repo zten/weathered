@@ -31,6 +31,9 @@ object LoadISDFile {
     val stations = db("stations")
     val coll = db("observations")
 
+    var indexed = 0
+    var observationsRecorded = 0
+
     recursiveListFiles(new File(args(0))).foreach(
       f => {
         val nameComponents = f.getName.split("-")
@@ -68,21 +71,27 @@ object LoadISDFile {
                   docBuilder += "liquidprecipdepth_hour" -> list(10)
                   docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
+                  observationsRecorded += 1
+
                   docBuilder.result()
                 }
               }).toList
 
               coll.save(stationYearDoc.result())
+
+              indexed += 1
             }
             case None => {
               println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
-              System.exit(1)
             }
 
           }
         }
       }
     )
+
+    println("stations with data recorded: " + indexed)
+    println("observations recorded: " + observationsRecorded)
     log.info("observations recorded from input file")
   }
 }
