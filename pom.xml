@@ -5,7 +5,6 @@
   <artifactId>weathered</artifactId>
   <version>0.1-SNAPSHOT</version>
   <inceptionYear>2012</inceptionYear>
-  <!--<packaging>rar</packaging>-->
   <properties>
     <scala.version>2.9.2</scala.version>
   </properties>
@@ -93,7 +92,7 @@
                     </descriptorRefs>
                     <archive>
                         <manifest>
-                            <!--<mainClass>weathered.LoadISDFile</mainClass>-->
+                            <mainClass>weathered.LoadISDFile</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
