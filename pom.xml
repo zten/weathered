@@ -93,7 +93,7 @@
                     </descriptorRefs>
                     <archive>
                         <manifest>
-                            <mainClass>weathered.LoadISDFile</mainClass>
+                            <!--<mainClass>weathered.LoadISDFile</mainClass>-->
                         </manifest>
                     </archive>
                 </configuration>
