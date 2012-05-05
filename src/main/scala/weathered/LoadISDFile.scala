@@ -5,8 +5,8 @@ import java.io.FileInputStream
 import org.apache.log4j.Logger
 import java.util.GregorianCalendar
 import java.io.File
-import collection.mutable.ListBuffer
-import com.mongodb.casbah.commons.MongoDBObjectBuilder
+import akka.actor._
+import akka.routing.RoundRobinRouter
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -27,71 +27,77 @@ object LoadISDFile {
       System.exit(1)
     }
 
-    val db = MongoConnection()("weathered")
-    val stations = db("stations")
-    val coll = db("observations")
+    val system = ActorSystem("system")
 
-    var indexed = 0
-    var observationsRecorded = 0
+    val workers = system.actorOf(Props[ISDIndexActor].withRouter(RoundRobinRouter(8)), name = "workers")
 
-    recursiveListFiles(new File(args(0))).foreach(
-      f => {
-        val nameComponents = f.getName.split("-")
-        if (nameComponents.length != 3) {
-          println("ISD file name should fit the format <USAF>-<WBAN>-<year>")
-        } else {
-          val usaf = nameComponents(0)
-          val wban = nameComponents(1)
-          val year = nameComponents(2)
-          stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
-            case Some(x) => {
-              val station = x
-              val stationYearDoc = MongoDBObject.newBuilder
+    recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
 
-              stationYearDoc += "station" -> station
-              stationYearDoc += "year" -> year
-              stationYearDoc += "observations" -> io.Source.fromInputStream(
+  }
+}
+
+sealed trait IndexingCommand
+case class IndexFile(file:File) extends IndexingCommand
+
+class ISDIndexActor extends Actor {
+  val log = Logger.getLogger(this.toString)
+  val db = MongoConnection()("weathered")
+  val stations = db("stations")
+  val coll = db("observations")
+
+  protected def receive = {
+    case command:IndexingCommand =>
+      command match {
+        case IndexFile(f) => {
+          val nameComponents = f.getName.split("-")
+          if (nameComponents.length != 3) {
+            println("ISD file name should fit the format <USAF>-<WBAN>-<year>")
+          } else {
+            val usaf = nameComponents(0)
+            val wban = nameComponents(1)
+            val year = nameComponents(2)
+            stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
+              case Some(x) => {
+                val station = x
+                val stationYearDoc = MongoDBObject.newBuilder
+
+                stationYearDoc += "station" -> station
+                stationYearDoc += "year" -> year
+                stationYearDoc += "observations" -> io.Source.fromInputStream(
                   new FileInputStream(f)).getLines().map(line => {
-                val list = line.split("\\s+").map(s => Integer.valueOf(s))
+                  val list = line.split("\\s+").map(s => Integer.valueOf(s))
 
-                if (list.length != 12) {
-                  log.error("there should be exactly 12 observations, offending file: " + f.getName)
-                  DBObject.empty
-                } else {
-                  val docBuilder = MongoDBObject.newBuilder
-                  // Forgot months start at 0...
-                  val date = new GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
-                  docBuilder += "date" -> date
-                  docBuilder += "airtemp" -> list(4)
-                  docBuilder += "dewpointtemp" -> list(5)
-                  docBuilder += "sealevelpressure" -> list(6)
-                  docBuilder += "winddirection" -> list(7)
-                  docBuilder += "windspeedrate" -> list(8)
-                  docBuilder += "skycondition" -> list(9)
-                  docBuilder += "liquidprecipdepth_hour" -> list(10)
-                  docBuilder += "liquidprecipdepth_sixhour" -> list(11)
+                  if (list.length != 12) {
+                    log.error("there should be exactly 12 observations, offending file: " + f.getName)
+                    DBObject.empty
+                  } else {
+                    val docBuilder = MongoDBObject.newBuilder
+                    // Forgot months start at 0...
+                    val date = new GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
+                    docBuilder += "date" -> date
+                    docBuilder += "airtemp" -> list(4)
+                    docBuilder += "dewpointtemp" -> list(5)
+                    docBuilder += "sealevelpressure" -> list(6)
+                    docBuilder += "winddirection" -> list(7)
+                    docBuilder += "windspeedrate" -> list(8)
+                    docBuilder += "skycondition" -> list(9)
+                    docBuilder += "liquidprecipdepth_hour" -> list(10)
+                    docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
-                  observationsRecorded += 1
+                    docBuilder.result()
+                  }
+                }).toList
 
-                  docBuilder.result()
-                }
-              }).toList
+                coll.save(stationYearDoc.result())
 
-              coll.save(stationYearDoc.result())
-
-              indexed += 1
+              }
+              case None => {
+                println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
+              }
             }
-            case None => {
-              println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
-            }
-
           }
         }
-      }
-    )
 
-    println("stations with data recorded: " + indexed)
-    println("observations recorded: " + observationsRecorded)
-    log.info("observations recorded from input file")
+    }
   }
 }
