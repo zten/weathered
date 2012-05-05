@@ -70,7 +70,7 @@ object LoadISDFile {
 
                   docBuilder.result()
                 }
-              })
+              }).toList
 
               coll.save(stationYearDoc.result())
             }
