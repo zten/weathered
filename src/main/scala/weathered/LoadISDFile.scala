@@ -29,7 +29,9 @@ object LoadISDFile {
 
     val system = ActorSystem("system")
 
-    val workers = system.actorOf(Props[ISDIndexActor].withRouter(RoundRobinRouter(8)), name = "workers")
+    val listener = system.actorOf(Props[ListeningActor], name = "listener")
+
+    val workers = system.actorOf(Props(new ISDIndexActor(listener)).withRouter(RoundRobinRouter(8)), name = "workers")
 
     recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
 
@@ -38,8 +40,31 @@ object LoadISDFile {
 
 sealed trait IndexingCommand
 case class IndexFile(file:File) extends IndexingCommand
+case object IndexedAFile extends IndexingCommand
 
-class ISDIndexActor extends Actor {
+class ListeningActor extends Actor {
+  var count:Int = 0
+  val start = System.nanoTime()
+  var elapsed:Long = 0
+
+  protected def receive = {
+    case command:IndexingCommand =>
+      command match {
+        case IndexedAFile => {
+          count += 1
+          elapsed = System.nanoTime() - start
+          if ((count % 10) == 0) {
+            println(count)
+            println("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000.toDouble)))
+            println("elapsed time: " + (elapsed / 1000000) + " seconds")
+          }
+
+        }
+      }
+  }
+}
+
+class ISDIndexActor(val listener:ActorRef) extends Actor {
   val log = Logger.getLogger(this.toString)
   val db = MongoConnection()("weathered")
   val stations = db("stations")
@@ -89,7 +114,7 @@ class ISDIndexActor extends Actor {
                 }).toList
 
                 coll.save(stationYearDoc.result())
-
+                listener ! IndexedAFile
               }
               case None => {
                 println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
