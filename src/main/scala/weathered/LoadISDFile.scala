@@ -34,7 +34,6 @@ object LoadISDFile {
     if (args.length == 3) loop = args(2).toBoolean
 
     val system = ActorSystem("system", ConfigFactory.parseFile(new File("application.conf")))
-    system.dispatchers
 
     val listener = system.actorOf(Props[ListeningActor], name = "listener")
 
