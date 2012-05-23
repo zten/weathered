@@ -7,6 +7,7 @@ import java.util.GregorianCalendar
 import java.io.File
 import akka.actor._
 import akka.routing.RoundRobinRouter
+import com.typesafe.config.{ConfigFactory, Config}
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -22,18 +23,28 @@ object LoadISDFile {
   }
 
   def main(args:Array[String]) {
-    if (args.length == 0) {
-      println("need to specify a filename for an ISD lite folder")
+    val actors = args(1).toInt
+    var loop = false
+
+    if (args.length == 0 || args.length == 1) {
+      println("need to specify a filename for an ISD lite folder, and a number of actors")
       System.exit(1)
     }
 
-    val system = ActorSystem("system")
+    if (args.length == 3) loop = args(2).toBoolean
+
+    val system = ActorSystem("system", ConfigFactory.parseFile(new File("application.conf")))
+    system.dispatchers
 
     val listener = system.actorOf(Props[ListeningActor], name = "listener")
 
-    val workers = system.actorOf(Props(new ISDIndexActor(listener)).withRouter(RoundRobinRouter(8)), name = "workers")
+    println("Initializing with " + actors + " actor(s)")
+    val workers = system.actorOf(Props(new ISDIndexActor(listener)).withRouter(RoundRobinRouter(actors)).
+      withDispatcher("custom-dispatch"), name = "workers")
 
-    recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
+    do {
+      recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
+    } while (loop)
 
   }
 }
@@ -55,8 +66,8 @@ class ListeningActor extends Actor {
           elapsed = System.nanoTime() - start
           if ((count % 10) == 0) {
             println(count)
-            println("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000.toDouble)))
-            println("elapsed time: " + (elapsed / 1000000) + " seconds")
+            println("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
+            println("elapsed time: " + (elapsed / 1000000000) + " seconds")
           }
 
         }
@@ -69,6 +80,7 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
   val db = MongoConnection()("weathered")
   val stations = db("stations")
   val coll = db("observations")
+  log.info(self.toString() + " created")
 
   protected def receive = {
     case command:IndexingCommand =>
