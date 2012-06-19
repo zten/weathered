@@ -2,8 +2,8 @@ package weathered
 
 import org.apache.log4j.Logger
 import java.io.{FileInputStream, File}
-import backtype.storm.topology.base.{BaseBasicBolt, BaseRichBolt, BaseRichSpout}
-import backtype.storm.topology.{BasicOutputCollector, TopologyBuilder, OutputFieldsDeclarer}
+import backtype.storm.topology.base.{BaseRichBolt, BaseRichSpout}
+import backtype.storm.topology.{TopologyBuilder, OutputFieldsDeclarer}
 import java.util
 import backtype.storm.task.{OutputCollector, TopologyContext}
 import backtype.storm.spout.SpoutOutputCollector
@@ -34,7 +34,7 @@ object LoadISDStorm {
 
     val builder = new TopologyBuilder()
     builder.setSpout("observations", new ObservationProducer(), 1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt(), 4).shuffleGrouping("observations")
+    builder.setBolt("dbDriver", new MongoUpdateBolt(), 16).shuffleGrouping("observations")
     builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
 
 
@@ -60,8 +60,10 @@ object ObservationProducer {
 
 class ObservationProducer extends BaseRichSpout {
   private var _collector:SpoutOutputCollector = null
-  val queue = new LinkedBlockingQueue[Observation](100)
+  val queue = new LinkedBlockingQueue[Observation](10)
   var thread:Thread = null
+
+  var count:Long = 0
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
     _collector = collector
@@ -70,6 +72,7 @@ class ObservationProducer extends BaseRichSpout {
   }
 
   def nextTuple() {
+    val start = System.currentTimeMillis()
     val offering = queue.poll(1, util.concurrent.TimeUnit.SECONDS)
     if (offering == null) {
       ObservationProducer.log.info("couldn't poll")
@@ -81,6 +84,13 @@ class ObservationProducer extends BaseRichSpout {
       tmp.add(offering.line.asInstanceOf[Object])
       tmp.add(offering.stationYear.asInstanceOf[Object])
       _collector.emit(tmp)
+    }
+
+    val end = System.currentTimeMillis()
+
+    count += 1
+    if (count % 1000 == 0) {
+      println("emitting time: " + (end - start) + " ms")
     }
 
   }
@@ -98,6 +108,7 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
   private val stationMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
+  private val stationYearMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
 
   def run() {
     stations = db("stations")
@@ -116,20 +127,21 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
       val wban = nameComponents(1)
       val year = nameComponents(2)
 
-      var stationYear = MongoDBObject.empty
 
-      val key = MongoDBObject("usaf" -> usaf, "wban" -> wban)
+      val stationKey = MongoDBObject("usaf" -> usaf, "wban" -> wban)
 
       val id = MongoDBObject("_id" -> 1)
 
-      val station = stationMap.get(key) match {
+      val start = System.currentTimeMillis()
+
+      val station = stationMap.get(stationKey) match {
         case Some(hasStation) =>
           hasStation
 
         case None =>
-          stations.findOne(key, id) match {
+          stations.findOne(stationKey, id) match {
             case Some(found) =>
-              stationMap += key -> found
+              stationMap += stationKey -> found
               found
             case None =>
               Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
@@ -138,23 +150,36 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
 
       }
 
-      val toFind = MongoDBObject("station" -> station)
-      coll.findOne(toFind, id) match {
-        case Some(stationYearExists) =>
-          stationYear = stationYearExists
+      val stationYearKey = MongoDBObject("station" -> station)
+
+      val stationYear = stationYearMap.get(stationYearKey) match {
+        case Some(found) =>
+          println(found)
+          found
+
         case None =>
-          println("need to make a new doc")
-          val newDoc = MongoDBObject.newBuilder
-          newDoc += "station" -> station
-          newDoc += "year" -> year
-          val res = newDoc.result()
-          coll.save(res)
-          stationYear = res
+          coll.findOne(stationYearKey, id) match {
+            case Some(stationYearExists) =>
+              stationYearMap += stationYearKey -> stationYearExists
+              stationYearExists
+            case None =>
+              val newDoc = MongoDBObject.newBuilder
+              newDoc += "station" -> station
+              newDoc += "year" -> year
+              val res = newDoc.result()
+              coll.save(res)
+              res
+          }
       }
+
+
 
       io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
         queue.put(new Observation(usaf, wban, line, stationYear))
       })
+
+      val end = System.currentTimeMillis()
+      println("elapsed time for processing doc: " + (end - start) + " ms")
     }
 
   }
@@ -176,6 +201,8 @@ class MongoUpdateBolt extends BaseRichBolt {
 
   private val dummyValue = new Values("")
 
+  private var counter:Long = 0
+
   override def prepare(p1: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
     db = MongoConnection()("weathered")
     coll = db("observations")
@@ -183,6 +210,8 @@ class MongoUpdateBolt extends BaseRichBolt {
   }
 
   override def execute(tuple: Tuple) {
+    val start = System.currentTimeMillis()
+
     val line = tuple.getString(2)
     val list = line.split("\\s+").map(s => Integer.valueOf(s))
     if (list.length != 12) {
@@ -191,6 +220,12 @@ class MongoUpdateBolt extends BaseRichBolt {
       doUpdate(tuple.getValue(3).asInstanceOf[DBObject], list)
       _collector.ack(tuple)
       _collector.emit(dummyValue)
+    }
+
+    val end = System.currentTimeMillis()
+    counter += 1
+    if ((counter % 1000) == 0) {
+      println("elapsed time for update: " + (end - start) + " ms")
     }
 
   }
@@ -210,8 +245,8 @@ class MongoUpdateBolt extends BaseRichBolt {
     docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
     // IntelliJ Scala plugin will report a highlight error here and there isn't one.
-    val toPush = $push("observations" -> docBuilder.result())
 
+    val toPush = $push("observations" -> docBuilder.result())
     coll.update(stationYear, toPush)
   }
 
