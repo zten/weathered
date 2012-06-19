@@ -13,6 +13,7 @@ import util.concurrent.LinkedBlockingQueue
 import backtype.storm.utils.Utils
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.Imports._
+import javax.print.attribute.standard.QueuedJobCount
 
 /**
  * A shot at using Storm to stream data to workers, instead of the actor system in LoadISDFile.
@@ -97,6 +98,9 @@ object Queuer {
 class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observation]) extends Runnable {
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
+  private val stationMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
+
+  private var queued = 0
 
   def run() {
     stations = db("stations")
@@ -115,27 +119,48 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
       val wban = nameComponents(1)
       val year = nameComponents(2)
 
-      val idobject = MongoDBObject("_id" -> 1)
-      val station = MongoDBObject("usaf" -> usaf, "wban" -> wban)
+      var stationYear = MongoDBObject.empty
 
-      val stationYear = {
-        val toFind = MongoDBObject("station" -> station)
-        coll.findOne(toFind, idobject) match {
-          case Some(stationYearExists) =>
-            toFind
-          case None =>
-            val stationYear = MongoDBObject.newBuilder
-            stationYear += "station" -> stations.findOne(station)
-            stationYear += "year" -> year
-            val res = stationYear.result()
-            coll.save(res)
-            res
-        }
+      val key = MongoDBObject("usaf" -> usaf, "wban" -> wban)
+
+      val id = MongoDBObject("_id" -> 1)
+
+      val station = stationMap.get(key) match {
+        case Some(hasStation) =>
+          hasStation
+
+        case None =>
+          stations.findOne(key, id) match {
+            case Some(found) =>
+              stationMap += key -> found
+              found
+            case None =>
+              Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
+              return
+          }
+
       }
 
+      val toFind = MongoDBObject("station" -> station)
+      coll.findOne(toFind, id) match {
+        case Some(stationYearExists) =>
+          stationYear = stationYearExists
+        case None =>
+          println("need to make a new doc")
+          val newDoc = MongoDBObject.newBuilder
+          newDoc += "station" -> station
+          newDoc += "year" -> year
+          val res = newDoc.result()
+          coll.save(res)
+          stationYear = res
+      }
 
       io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
         queue.put(new Observation(usaf, wban, line, stationYear))
+        queued += 1
+        if (queued % 100 == 0) {
+          Queuer.log.info("queued 100 observations, current size " + queue.size())
+        }
       })
 
     }
@@ -159,6 +184,8 @@ class MongoUpdateBolt extends BaseRichBolt {
 
   private var _collector:OutputCollector = null
 
+  private val dummyValue = new Values("")
+
   override def prepare(p1: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
     db = MongoConnection()("weathered")
     stations = db("stations")
@@ -173,7 +200,7 @@ class MongoUpdateBolt extends BaseRichBolt {
       MongoUpdateBolt.log.error("received invalid input: %s".format(line))
     } else {
       doUpdate(tuple.getValue(3).asInstanceOf[DBObject], list)
-      _collector.emit(new Values(""))
+      _collector.emit(dummyValue)
     }
 
   }
