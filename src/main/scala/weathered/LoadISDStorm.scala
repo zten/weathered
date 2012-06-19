@@ -34,15 +34,18 @@ object LoadISDStorm {
 
     val builder = new TopologyBuilder()
     builder.setSpout("observations", new ObservationProducer(), 1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt(), 16).shuffleGrouping("observations")
+    builder.setBolt("dbDriver", new MongoUpdateBolt(), 4).shuffleGrouping("observations")
+    builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
+
 
     val config = new Config()
+    //config.setDebug(true)
     config.put("directory", dir)
 
     val cluster = new LocalCluster()
     cluster.submitTopology("reader", config, builder.createTopology())
 
-    Utils.sleep(15000)
+    Utils.sleep(180000)
     cluster.shutdown()
 
   }
@@ -57,7 +60,7 @@ object ObservationProducer {
 
 class ObservationProducer extends BaseRichSpout {
   private var _collector:SpoutOutputCollector = null
-  val queue = new LinkedBlockingQueue[Observation]()
+  val queue = new LinkedBlockingQueue[Observation](100)
   var thread:Thread = null
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
@@ -98,7 +101,9 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
   def run() {
     stations = db("stations")
     coll = db("observations")
-    Helper.recursiveListFiles(dir).filter(_.getName.matches("\\d{6}-\\d{5}-\\d{4}")).foreach(f => enqueue(f))
+    while (true) {
+      Helper.recursiveListFiles(dir).filter(_.getName.matches("\\d{6}-\\d{5}-\\d{4}")).foreach(f => enqueue(f))
+    }
   }
 
   def enqueue(file: File) {
@@ -110,32 +115,31 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
       val wban = nameComponents(1)
       val year = nameComponents(2)
 
-      stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
-        case Some(station) => {
-          val stationYear = {
-            coll.findOne(MongoDBObject("station" -> station)) match {
-              case Some(stationYearExists) =>
-                stationYearExists
-              case None =>
-                val stationYear = MongoDBObject.newBuilder
-                stationYear += "station" -> station
-                stationYear += "year" -> year
-                val res = stationYear.result()
-                coll.save(res)
-                res
-            }
-          }
+      val idobject = MongoDBObject("_id" -> 1)
+      val station = MongoDBObject("usaf" -> usaf, "wban" -> wban)
 
-          io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
-            queue.put(new Observation(usaf, wban, line, stationYear))
-          })
-        }
-        case None => {
-          Queuer.log.error("Couldn't find station with usaf %s wban %s".format(usaf, wban))
+      val stationYear = {
+        val toFind = MongoDBObject("station" -> station)
+        coll.findOne(toFind, idobject) match {
+          case Some(stationYearExists) =>
+            toFind
+          case None =>
+            val stationYear = MongoDBObject.newBuilder
+            stationYear += "station" -> stations.findOne(station)
+            stationYear += "year" -> year
+            val res = stationYear.result()
+            coll.save(res)
+            res
         }
       }
 
+
+      io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
+        queue.put(new Observation(usaf, wban, line, stationYear))
+      })
+
     }
+
   }
 
 }
@@ -153,10 +157,13 @@ class MongoUpdateBolt extends BaseRichBolt {
   @transient
   private var coll:MongoCollection = null
 
-  override def prepare(p1: util.Map[_, _], p2: TopologyContext, p3: OutputCollector) {
+  private var _collector:OutputCollector = null
+
+  override def prepare(p1: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
     db = MongoConnection()("weathered")
     stations = db("stations")
     coll = db("observations")
+    _collector = collector
   }
 
   override def execute(tuple: Tuple) {
@@ -166,6 +173,7 @@ class MongoUpdateBolt extends BaseRichBolt {
       MongoUpdateBolt.log.error("received invalid input: %s".format(line))
     } else {
       doUpdate(tuple.getValue(3).asInstanceOf[DBObject], list)
+      _collector.emit(new Values(""))
     }
 
   }
@@ -191,6 +199,32 @@ class MongoUpdateBolt extends BaseRichBolt {
   }
 
 
-  def declareOutputFields(p1: OutputFieldsDeclarer) {}
+  def declareOutputFields(declarer: OutputFieldsDeclarer) {
+    declarer.declare(new Fields("dummy"))
+  }
 
+}
+
+class MonitorBolt extends BaseRichBolt {
+  private var startTime:Long = 0
+  private var count:Long = 0
+  private var elapsed:Long = 0
+
+  def prepare(p1: util.Map[_, _], p2: TopologyContext, p3: OutputCollector) {
+    startTime = System.nanoTime()
+  }
+
+  def execute(p1: Tuple) {
+    count += 1
+    elapsed = System.nanoTime() - startTime
+    if ((count % 1000) == 0) {
+      println(count + " lines processed, avg lines per second: " +
+        (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
+      println("elapsed time: " + (elapsed / 1000000000) + " seconds")
+    }
+  }
+
+  def declareOutputFields(p1: OutputFieldsDeclarer) {
+
+  }
 }
