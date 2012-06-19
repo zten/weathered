@@ -1,13 +1,13 @@
-package weathered;
+package weathered
 
 import com.mongodb.casbah.Imports._
 import java.io.FileInputStream
 import org.apache.log4j.Logger
-import java.util.GregorianCalendar
 import java.io.File
+import java.util
 import akka.actor._
 import akka.routing.RoundRobinRouter
-import com.typesafe.config.{ConfigFactory, Config}
+import com.typesafe.config.ConfigFactory
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -16,11 +16,6 @@ import com.typesafe.config.{ConfigFactory, Config}
  */
 object LoadISDFile {
   val log = Logger.getLogger(this.toString)
-
-  def recursiveListFiles(f: File): Array[File] = {
-    val these = f.listFiles
-    these ++ these.filter(_.isDirectory).filter(_.getName.matches(".+\\.gz")).flatMap(recursiveListFiles)
-  }
 
   def main(args:Array[String]) {
     val actors = args(1).toInt
@@ -42,7 +37,7 @@ object LoadISDFile {
       withDispatcher("custom-dispatch"), name = "workers")
 
     do {
-      recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
+      Helper.recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
     } while (loop)
 
   }
@@ -60,6 +55,7 @@ class ListeningActor extends Actor {
   protected def receive = {
     case command:IndexingCommand =>
       command match {
+        case IndexFile(f) =>
         case IndexedAFile => {
           count += 1
           elapsed = System.nanoTime() - start
@@ -109,7 +105,7 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
                   } else {
                     val docBuilder = MongoDBObject.newBuilder
                     // Forgot months start at 0...
-                    val date = new GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
+                    val date = new util.GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
                     docBuilder += "date" -> date
                     docBuilder += "airtemp" -> list(4)
                     docBuilder += "dewpointtemp" -> list(5)
@@ -133,6 +129,8 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
             }
           }
         }
+
+        case IndexedAFile =>
 
     }
   }

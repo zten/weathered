@@ -20,6 +20,15 @@
       <name>Typesafe Repository</name>
       <url>http://repo.typesafe.com/typesafe/releases/</url>
     </repository>
+    <repository>
+      <id>github-releases</id>
+      <url>http://oss.sonatype.org/content/repositories/github-releases</url>
+    </repository>
+    <repository>
+        <id>clojars.org</id>
+        <url>http://clojars.org/repo</url>
+    </repository>
+
   </repositories>
 
   <pluginRepositories>
@@ -68,19 +77,19 @@
       </dependency>
 
       <dependency>
-          <groupId>org.ektorp</groupId>
-          <artifactId>org.ektorp</artifactId>
-          <version>1.2.1</version>
-      </dependency>
-
-      <dependency>
-          <groupId>org.codehaus.jackson</groupId>
-          <artifactId>jackson-mapper-asl</artifactId>
-          <version>1.9.7</version>
+          <groupId>storm</groupId>
+          <artifactId>storm</artifactId>
+          <version>0.7.2</version>
+          <scope>provided</scope>
       </dependency>
   </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>${basedir}/resources</directory>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <version>2.15.2</version>
