@@ -97,6 +97,7 @@ object Queuer {
 class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observation]) extends Runnable {
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
+  private val stationMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
 
   def run() {
     stations = db("stations")
@@ -113,20 +114,47 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
     } else {
       val usaf = nameComponents(0)
       val wban = nameComponents(1)
+      val year = nameComponents(2)
+
+      var stationYear = MongoDBObject.empty
 
       val key = MongoDBObject("usaf" -> usaf, "wban" -> wban)
 
       val id = MongoDBObject("_id" -> 1)
 
-      stations.findOne(key, id) match {
-        case Some(found) =>
-          io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
-            queue.put(new Observation(usaf, wban, line, found))
-          })
+      val station = stationMap.get(key) match {
+        case Some(hasStation) =>
+          hasStation
+
         case None =>
-          Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
-          return
+          stations.findOne(key, id) match {
+            case Some(found) =>
+              stationMap += key -> found
+              found
+            case None =>
+              Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
+              return
+          }
+
       }
+
+      val toFind = MongoDBObject("station" -> station)
+      coll.findOne(toFind, id) match {
+        case Some(stationYearExists) =>
+          stationYear = stationYearExists
+        case None =>
+          println("need to make a new doc")
+          val newDoc = MongoDBObject.newBuilder
+          newDoc += "station" -> station
+          newDoc += "year" -> year
+          val res = newDoc.result()
+          coll.save(res)
+          stationYear = res
+      }
+
+      io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
+        queue.put(new Observation(usaf, wban, line, stationYear))
+      })
     }
 
   }
@@ -167,11 +195,10 @@ class MongoUpdateBolt extends BaseRichBolt {
 
   }
 
-  def doUpdate(station: MongoDBObject, list:Array[java.lang.Integer]) {
+  def doUpdate(stationYear: MongoDBObject, list:Array[java.lang.Integer]) {
     val docBuilder = MongoDBObject.newBuilder
     // Forgot months start at 0...
     val date = new util.GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
-    docBuilder += "station" -> station
     docBuilder += "date" -> date
     docBuilder += "airtemp" -> list(4)
     docBuilder += "dewpointtemp" -> list(5)
@@ -183,8 +210,9 @@ class MongoUpdateBolt extends BaseRichBolt {
     docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
     // IntelliJ Scala plugin will report a highlight error here and there isn't one.
+    val toPush = $push("observations" -> docBuilder.result())
 
-    coll.save(docBuilder.result())
+    coll.update(stationYear, toPush)
   }
 
 
