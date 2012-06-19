@@ -2,8 +2,8 @@ package weathered
 
 import org.apache.log4j.Logger
 import java.io.{FileInputStream, File}
-import backtype.storm.topology.base.{BaseRichBolt, BaseRichSpout}
-import backtype.storm.topology.{TopologyBuilder, OutputFieldsDeclarer}
+import backtype.storm.topology.base.{BaseBasicBolt, BaseRichBolt, BaseRichSpout}
+import backtype.storm.topology.{BasicOutputCollector, TopologyBuilder, OutputFieldsDeclarer}
 import java.util
 import backtype.storm.task.{OutputCollector, TopologyContext}
 import backtype.storm.spout.SpoutOutputCollector
@@ -13,7 +13,6 @@ import util.concurrent.LinkedBlockingQueue
 import backtype.storm.utils.Utils
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.Imports._
-import javax.print.attribute.standard.QueuedJobCount
 
 /**
  * A shot at using Storm to stream data to workers, instead of the actor system in LoadISDFile.
@@ -99,8 +98,6 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
 
-  private var queued:Long = 0
-
   def run() {
     stations = db("stations")
     coll = db("observations")
@@ -125,10 +122,6 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
         case Some(found) =>
           io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
             queue.put(new Observation(usaf, wban, line, found))
-            queued += 1
-            if (queued % 100 == 0) {
-              Queuer.log.info("queued 100 observations, current size " + queue.size())
-            }
           })
         case None =>
           Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
