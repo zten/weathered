@@ -45,8 +45,6 @@ object LoadISDStorm {
     val cluster = new LocalCluster()
     cluster.submitTopology("reader", config, builder.createTopology())
 
-    Utils.sleep(180000)
-    cluster.shutdown()
 
   }
 
