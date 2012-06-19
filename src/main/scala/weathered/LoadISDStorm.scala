@@ -13,6 +13,7 @@ import util.concurrent.LinkedBlockingQueue
 import backtype.storm.utils.Utils
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.Imports._
+import com.mongodb.ServerAddress
 
 /**
  * A shot at using Storm to stream data to workers, instead of the actor system in LoadISDFile.
@@ -33,9 +34,10 @@ object LoadISDStorm {
     log.info("Reading from " + dir)
 
     val builder = new TopologyBuilder()
-    builder.setSpout("observations", new ObservationProducer(), 1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt(), 16).shuffleGrouping("observations")
-    builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
+    builder.setSpout("observations", new ObservationProducer(), 1).setMaxTaskParallelism(1)
+    builder.setBolt("dbDriver", new MongoUpdateBolt()).setMaxTaskParallelism(10).
+      shuffleGrouping("observations")
+    builder.setBolt("counter", new MonitorBolt()).setMaxTaskParallelism(1).globalGrouping("dbDriver")
 
 
     val config = new Config()
@@ -65,16 +67,19 @@ class ObservationProducer extends BaseRichSpout {
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
     _collector = collector
-    thread = new Thread(new Queuer(MongoConnection()("weathered"), new File(conf.get("directory").asInstanceOf[String]), queue))
+    val options = new MongoOptions()
+    options.threadsAllowedToBlockForConnectionMultiplier = 2
+    thread = new Thread(new Queuer(MongoConnection(new ServerAddress("localhost"), options)("weathered"),
+      new File(conf.get("directory").asInstanceOf[String]), queue))
     thread.start()
   }
 
   def nextTuple() {
     val start = System.currentTimeMillis()
-    val offering = queue.poll(1, util.concurrent.TimeUnit.SECONDS)
+    val offering = queue.poll(2, util.concurrent.TimeUnit.SECONDS)
     if (offering == null) {
       ObservationProducer.log.info("couldn't poll")
-      Utils.sleep(50)
+      Utils.sleep(200)
     } else {
       val tmp = new Values()
       tmp.add(offering.usaf.asInstanceOf[Object])
@@ -105,8 +110,6 @@ object Queuer {
 class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observation]) extends Runnable {
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
-  private val stationMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
-  private val stationYearMap:collection.mutable.Map[DBObject, DBObject] = collection.mutable.Map.empty
 
   def run() {
     stations = db("stations")
@@ -125,55 +128,33 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
       val wban = nameComponents(1)
       val year = nameComponents(2)
 
-
-      val stationKey = MongoDBObject("usaf" -> usaf, "wban" -> wban)
-
       val id = MongoDBObject("_id" -> 1)
 
       val start = System.currentTimeMillis()
 
-      val station = stationMap.get(stationKey) match {
-        case Some(hasStation) =>
-          hasStation
-
-        case None =>
-          stations.findOne(stationKey, id) match {
-            case Some(found) =>
-              stationMap += stationKey -> found
-              found
-            case None =>
-              Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
-              return
-          }
-
-      }
-
-      val stationYearKey = MongoDBObject("station" -> station)
-
-      val stationYear = stationYearMap.get(stationYearKey) match {
+      val station = stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban), id) match {
         case Some(found) =>
-          println(found)
           found
-
         case None =>
-          coll.findOne(stationYearKey, id) match {
-            case Some(stationYearExists) =>
-              stationYearMap += stationYearKey -> stationYearExists
-              stationYearExists
-            case None =>
-              val newDoc = MongoDBObject.newBuilder
-              newDoc += "station" -> station
-              newDoc += "year" -> year
-              val res = newDoc.result()
-              coll.save(res)
-              res
-          }
+          Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
+          return
       }
 
-
+      val stationYear = coll.findOne(MongoDBObject("station" -> station), id) match {
+        case Some(stationYearExists) =>
+          stationYearExists
+        case None =>
+          println("building new doc for station+year")
+          val newDoc = MongoDBObject.newBuilder
+          newDoc += "station" -> MongoDBObject("_id" -> station.get("_id"))
+          newDoc += "year" -> year
+          val res = newDoc.result()
+          coll += res
+          res
+      }
 
       io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
-        queue.put(new Observation(usaf, wban, line, stationYear))
+        queue.put(new Observation(usaf, wban, line, MongoDBObject("_id" -> stationYear.get("_id"))))
       })
 
       val end = System.currentTimeMillis()
@@ -244,8 +225,7 @@ class MongoUpdateBolt extends BaseRichBolt {
 
     // IntelliJ Scala plugin will report a highlight error here and there isn't one.
 
-    val toPush = $push("observations" -> docBuilder.result())
-    coll.update(stationYear, toPush)
+    coll.update(stationYear, $push("observations" -> docBuilder.result()))
   }
 
 
