@@ -57,15 +57,16 @@ object ObservationProducer {
 }
 
 class ObservationProducer extends BaseRichSpout {
+  private val queueSize = 100
   private var _collector:SpoutOutputCollector = null
-  private val queue = new LinkedBlockingQueue[Observation]()
+  private val queue = new LinkedBlockingQueue[Observation](queueSize)
   private var thread:Thread = null
 
   private var idCounter:Long = 0
 
   override def getComponentConfiguration = {
     val map = super.getComponentConfiguration
-    map.put("topology.max.spout.pending", 100.asInstanceOf[Object])
+    map.put("topology.max.spout.pending", queueSize.asInstanceOf[Object])
     map
   }
 
