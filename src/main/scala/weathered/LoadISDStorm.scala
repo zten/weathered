@@ -34,14 +34,14 @@ object LoadISDStorm {
     log.info("Reading from " + dir)
 
     val builder = new TopologyBuilder()
-    builder.setSpout("observations", new ObservationProducer(), 1).setMaxTaskParallelism(1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt()).setMaxTaskParallelism(10).
-      shuffleGrouping("observations")
-    builder.setBolt("counter", new MonitorBolt()).setMaxTaskParallelism(1).globalGrouping("dbDriver")
+
+    builder.setSpout("observations", new ObservationProducer(), 1)
+    builder.setBolt("dbDriver", new MongoUpdateBolt(), 4).shuffleGrouping("observations")
+    builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
 
 
     val config = new Config()
-    //config.setDebug(true)
+    config.put("topology.max.spout.pending", 10.asInstanceOf[Object])
     config.put("directory", dir)
 
     val cluster = new LocalCluster()
@@ -60,10 +60,10 @@ object ObservationProducer {
 
 class ObservationProducer extends BaseRichSpout {
   private var _collector:SpoutOutputCollector = null
-  val queue = new LinkedBlockingQueue[Observation](10)
-  var thread:Thread = null
+  private val queue = new LinkedBlockingQueue[Observation](100)
+  private var thread:Thread = null
 
-  var count:Long = 0
+  private var idCounter:Long = 0
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
     _collector = collector
@@ -75,7 +75,6 @@ class ObservationProducer extends BaseRichSpout {
   }
 
   def nextTuple() {
-    val start = System.currentTimeMillis()
     val offering = queue.poll(2, util.concurrent.TimeUnit.SECONDS)
     if (offering == null) {
       ObservationProducer.log.info("couldn't poll")
@@ -86,16 +85,9 @@ class ObservationProducer extends BaseRichSpout {
       tmp.add(offering.wban.asInstanceOf[Object])
       tmp.add(offering.line.asInstanceOf[Object])
       tmp.add(offering.stationYear.asInstanceOf[Object])
-      _collector.emit(tmp)
+      _collector.emit(tmp, idCounter)
+      idCounter += 1
     }
-
-    val end = System.currentTimeMillis()
-
-    count += 1
-    if (count % 1000 == 0) {
-      println("emitting time: " + (end - start) + " ms")
-    }
-
   }
 
   def declareOutputFields(declarer: OutputFieldsDeclarer) {
@@ -130,8 +122,6 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
 
       val id = MongoDBObject("_id" -> 1)
 
-      val start = System.currentTimeMillis()
-
       val station = stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban), id) match {
         case Some(found) =>
           found
@@ -144,7 +134,6 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
         case Some(stationYearExists) =>
           stationYearExists
         case None =>
-          println("building new doc for station+year")
           val newDoc = MongoDBObject.newBuilder
           newDoc += "station" -> MongoDBObject("_id" -> station.get("_id"))
           newDoc += "year" -> year
@@ -157,8 +146,6 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
         queue.put(new Observation(usaf, wban, line, MongoDBObject("_id" -> stationYear.get("_id"))))
       })
 
-      val end = System.currentTimeMillis()
-      println("elapsed time for processing doc: " + (end - start) + " ms")
     }
 
   }
@@ -189,8 +176,6 @@ class MongoUpdateBolt extends BaseRichBolt {
   }
 
   override def execute(tuple: Tuple) {
-    val start = System.currentTimeMillis()
-
     val line = tuple.getString(2)
     val list = line.split("\\s+").map(s => Integer.valueOf(s))
     if (list.length != 12) {
@@ -200,13 +185,6 @@ class MongoUpdateBolt extends BaseRichBolt {
       _collector.ack(tuple)
       _collector.emit(dummyValue)
     }
-
-    val end = System.currentTimeMillis()
-    counter += 1
-    if ((counter % 1000) == 0) {
-      println("elapsed time for update: " + (end - start) + " ms")
-    }
-
   }
 
   def doUpdate(stationYear: MongoDBObject, list:Array[java.lang.Integer]) {
@@ -240,7 +218,6 @@ class MonitorBolt extends BaseRichBolt {
   private var count:Long = 0
   private var elapsed:Long = 0
   private var _collector:OutputCollector = null
-
 
   def prepare(p1: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
     startTime = System.nanoTime()
