@@ -2,8 +2,8 @@ package weathered
 
 import org.apache.log4j.Logger
 import java.io.{FileInputStream, File}
-import backtype.storm.topology.base.{BaseBasicBolt, BaseRichBolt, BaseRichSpout}
-import backtype.storm.topology.{BasicOutputCollector, TopologyBuilder, OutputFieldsDeclarer}
+import backtype.storm.topology.base.{BaseRichBolt, BaseRichSpout}
+import backtype.storm.topology.{TopologyBuilder, OutputFieldsDeclarer}
 import java.util
 import backtype.storm.task.{OutputCollector, TopologyContext}
 import backtype.storm.spout.SpoutOutputCollector
@@ -30,16 +30,12 @@ object LoadISDStorm {
       System.exit(1)
     }
 
-    log.info("Reading from " + dir)
-
     val builder = new TopologyBuilder()
     builder.setSpout("observations", new ObservationProducer(), 1)
     builder.setBolt("dbDriver", new MongoUpdateBolt(), 8).shuffleGrouping("observations")
     builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
 
-
     val config = new Config()
-    //config.setDebug(true)
     config.put("directory", dir)
 
     val cluster = new LocalCluster()
@@ -65,7 +61,10 @@ class ObservationProducer extends BaseRichSpout {
   private var idCounter:Long = 0
 
   override def getComponentConfiguration = {
-    val map = super.getComponentConfiguration
+    var map = super.getComponentConfiguration
+    if (map == null) {
+      map = new util.HashMap[String, Object]()
+    }
     map.put("topology.max.spout.pending", queueSize.asInstanceOf[Object])
     map
   }
@@ -80,7 +79,6 @@ class ObservationProducer extends BaseRichSpout {
     val offering = queue.poll(1, util.concurrent.TimeUnit.SECONDS)
     if (offering == null) {
       ObservationProducer.log.info("couldn't poll")
-      Utils.sleep(50)
     } else {
       val tmp = new Values()
       tmp.add(offering.usaf.asInstanceOf[Object])
