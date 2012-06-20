@@ -10,7 +10,6 @@ import backtype.storm.spout.SpoutOutputCollector
 import backtype.storm.tuple.{Values, Tuple, Fields}
 import backtype.storm.{LocalCluster, Config}
 import util.concurrent.LinkedBlockingQueue
-import backtype.storm.utils.Utils
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.Imports._
 
@@ -24,10 +23,14 @@ import com.mongodb.casbah.Imports._
 object LoadISDStorm {
   val log = Logger.getLogger(this.toString)
   def main(args:Array[String]) {
-    val dir = System.getProperty("weathered.dataDir")
+    var dir = System.getProperty("weathered.dataDir")
     if (dir == null) {
-      log.error("need to specify a filename for an ISD lite folder")
-      System.exit(1)
+      if (args.length == 0) {
+        log.error("need to specify a filename for an ISD lite folder")
+        System.exit(1)
+      } else {
+        dir = args(0)
+      }
     }
 
     val builder = new TopologyBuilder()
