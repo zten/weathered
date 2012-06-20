@@ -34,7 +34,7 @@ object LoadISDStorm {
 
     val builder = new TopologyBuilder()
     builder.setSpout("observations", new ObservationProducer(), 1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt(), 4).shuffleGrouping("observations")
+    builder.setBolt("dbDriver", new MongoUpdateBolt(), 8).shuffleGrouping("observations")
     builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
 
 
@@ -58,8 +58,16 @@ object ObservationProducer {
 
 class ObservationProducer extends BaseRichSpout {
   private var _collector:SpoutOutputCollector = null
-  val queue = new LinkedBlockingQueue[Observation](100)
-  var thread:Thread = null
+  private val queue = new LinkedBlockingQueue[Observation]()
+  private var thread:Thread = null
+
+  private var idCounter:Long = 0
+
+  override def getComponentConfiguration = {
+    val map = super.getComponentConfiguration
+    map.put("topology.max.spout.pending", 100.asInstanceOf[Object])
+    map
+  }
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
     _collector = collector
@@ -78,7 +86,8 @@ class ObservationProducer extends BaseRichSpout {
       tmp.add(offering.wban.asInstanceOf[Object])
       tmp.add(offering.line.asInstanceOf[Object])
       tmp.add(offering.stationYear.asInstanceOf[Object])
-      _collector.emit(tmp)
+      _collector.emit(tmp, idCounter)
+      idCounter += 1
     }
 
   }
