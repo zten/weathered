@@ -10,6 +10,7 @@ import akka.routing.RoundRobinRouter
 import com.typesafe.config.ConfigFactory
 import com.google.common.hash.{Hashing, HashCode}
 import collection.mutable.ListBuffer
+import weathered.Helper
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
