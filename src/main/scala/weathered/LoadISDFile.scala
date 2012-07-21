@@ -8,6 +8,8 @@ import java.util
 import akka.actor._
 import akka.routing.RoundRobinRouter
 import com.typesafe.config.ConfigFactory
+import com.google.common.hash.{Hashing, HashCode}
+import collection.mutable.ListBuffer
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -91,36 +93,66 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
             stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
               case Some(x) => {
                 val station = x
-                val stationYearDoc = MongoDBObject.newBuilder
 
-                stationYearDoc += "station" -> station
-                stationYearDoc += "year" -> year
-                stationYearDoc += "observations" -> io.Source.fromInputStream(
-                  new FileInputStream(f)).getLines().map(line => {
+                val docs = new ListBuffer[DBObject]
+
+                io.Source.fromInputStream(new FileInputStream(f)).getLines().foreach(line => {
                   val list = line.split("\\s+").map(s => Integer.valueOf(s))
 
                   if (list.length != 12) {
                     log.error("there should be exactly 12 observations, offending file: " + f.getName)
-                    DBObject.empty
                   } else {
-                    val docBuilder = MongoDBObject.newBuilder
+                    // let's come up with a hash for the input so that we can check if we've recorded this observation
+                    // already
+
                     // Forgot months start at 0...
+                    val hashCode = Hashing.sha512().newHasher()
+
                     val date = new util.GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
-                    docBuilder += "date" -> date
-                    docBuilder += "airtemp" -> list(4)
-                    docBuilder += "dewpointtemp" -> list(5)
-                    docBuilder += "sealevelpressure" -> list(6)
-                    docBuilder += "winddirection" -> list(7)
-                    docBuilder += "windspeedrate" -> list(8)
-                    docBuilder += "skycondition" -> list(9)
-                    docBuilder += "liquidprecipdepth_hour" -> list(10)
-                    docBuilder += "liquidprecipdepth_sixhour" -> list(11)
 
-                    docBuilder.result()
+                    val  airtemp = list(4)
+                    val dewpointtemp = list(5)
+                    val sealevelpressure = list(6)
+                    val winddirection = list(7)
+                    val windspeedrate = list(8)
+                    val skycondition = list(9)
+                    val liquidprecipdepth_hour = list(10)
+                    val liquidprecipdepth_sixhour = list(11)
+
+                    hashCode.putLong(date.getTime).putInt(airtemp).putInt(dewpointtemp).putInt(sealevelpressure).
+                      putInt(winddirection).putInt(windspeedrate).putInt(skycondition).putInt(liquidprecipdepth_hour).
+                      putInt(liquidprecipdepth_sixhour)
+
+                    val code = hashCode.hash().asBytes()
+
+                    val hashCheck = MongoDBObject.newBuilder
+                    hashCheck += "_id" -> code
+
+                    coll.findOne(hashCheck.result()) match {
+                      case Some(observation) =>
+
+                      case None =>
+                        val docBuilder = MongoDBObject.newBuilder
+                        docBuilder += "_id" -> code
+                        docBuilder += "station" -> station
+                        docBuilder += "year" -> year
+                        docBuilder += "date" -> date
+                        docBuilder += "airtemp" -> list(4)
+                        docBuilder += "dewpointtemp" -> list(5)
+                        docBuilder += "sealevelpressure" -> list(6)
+                        docBuilder += "winddirection" -> list(7)
+                        docBuilder += "windspeedrate" -> list(8)
+                        docBuilder += "skycondition" -> list(9)
+                        docBuilder += "liquidprecipdepth_hour" -> list(10)
+                        docBuilder += "liquidprecipdepth_sixhour" -> list(11)
+
+                        docs += docBuilder.result()
+                    }
                   }
-                }).toList
+                })
 
-                coll.save(stationYearDoc.result())
+                coll.insert(docs.toList)
+
                 listener ! IndexedAFile
               }
               case None => {

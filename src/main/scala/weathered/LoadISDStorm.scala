@@ -1,17 +1,22 @@
 package weathered
 
 import org.apache.log4j.Logger
-import java.io.{FileInputStream, File}
 import backtype.storm.topology.base.{BaseRichBolt, BaseRichSpout}
 import backtype.storm.topology.{TopologyBuilder, OutputFieldsDeclarer}
 import java.util
 import backtype.storm.task.{OutputCollector, TopologyContext}
 import backtype.storm.spout.SpoutOutputCollector
 import backtype.storm.tuple.{Values, Tuple, Fields}
-import backtype.storm.{LocalCluster, Config}
+import backtype.storm.{StormSubmitter, LocalCluster, Config}
 import util.concurrent.LinkedBlockingQueue
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.Imports._
+import org.apache.http.client.methods.HttpGet
+import org.apache.http.impl.client.DefaultHttpClient
+import org.apache.http.conn.HttpHostConnectException
+
+import scala.collection.JavaConversions._
+import com.mongodb.ServerAddress
 
 /**
  * A shot at using Storm to stream data to workers, instead of the actor system in LoadISDFile.
@@ -23,28 +28,29 @@ import com.mongodb.casbah.Imports._
 object LoadISDStorm {
   val log = Logger.getLogger(this.toString)
   def main(args:Array[String]) {
-    var dir = System.getProperty("weathered.dataDir")
-    if (dir == null) {
-      if (args.length == 0) {
-        log.error("need to specify a filename for an ISD lite folder")
-        System.exit(1)
-      } else {
-        dir = args(0)
-      }
+    if (args.length < 2) {
+      log.error("need to specify a url and mongo server")
+      System.exit(1)
     }
 
     val builder = new TopologyBuilder()
-    builder.setSpout("observations", new ObservationProducer(), 1)
-    builder.setBolt("dbDriver", new MongoUpdateBolt(), 8).shuffleGrouping("observations")
-    builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
+    builder.setSpout("observations", new ObservationProducer(), args(2).toInt)
+    builder.setBolt("dbDriver", new MongoUpdateBolt(), args(3).toInt).shuffleGrouping("observations")
+    //builder.setBolt("counter", new MonitorBolt(), 1).globalGrouping("dbDriver")
 
     val config = new Config()
-    config.put("directory", dir)
+    config.put("url", args(0))
+    config.put("mongo", args(1))
+    config.setNumWorkers(args(4).toInt)
+    config.setNumAckers(args(7).toInt)
+    config.setMaxSpoutPending(args(6).toInt)
 
-    val cluster = new LocalCluster()
-    cluster.submitTopology("reader", config, builder.createTopology())
-
-
+    if (args.length >= 6 && args(5).equalsIgnoreCase("local")) {
+      val cluster = new LocalCluster()
+      cluster.submitTopology("reader", config, builder.createTopology())
+    } else {
+      StormSubmitter.submitTopology("reader", config, builder.createTopology())
+    }
   }
 
 }
@@ -56,25 +62,29 @@ object ObservationProducer {
 }
 
 class ObservationProducer extends BaseRichSpout {
-  private val queueSize = 100
+  private val queueSize = 1000
   private var _collector:SpoutOutputCollector = null
   private val queue = new LinkedBlockingQueue[Observation](queueSize)
   private var thread:Thread = null
 
   private var idCounter:Long = 0
 
-  override def getComponentConfiguration = {
-    var map = super.getComponentConfiguration
-    if (map == null) {
-      map = new util.HashMap[String, Object]()
-    }
-    map.put("topology.max.spout.pending", queueSize.asInstanceOf[Object])
-    map
-  }
+//  override def getComponentConfiguration = {
+//    var map = super.getComponentConfiguration
+//    if (map == null) {
+//      map = new util.HashMap[String, Object]()
+//    }
+//    map.put("topology.max.spout.pending", queueSize.asInstanceOf[Object])
+//    map
+//  }
 
   def open(conf: util.Map[_, _], context: TopologyContext, collector: SpoutOutputCollector) {
     _collector = collector
-    thread = new Thread(new Queuer(MongoConnection()("weathered"), new File(conf.get("directory").asInstanceOf[String]), queue))
+    val options = new MongoOptions()
+    options.connectionsPerHost = 1
+    options.threadsAllowedToBlockForConnectionMultiplier = 1
+    val addr = new ServerAddress(conf.get("mongo").asInstanceOf[String])
+    thread = new Thread(new Queuer(MongoConnection(addr, options)("weathered"), conf.get("url").asInstanceOf[String], queue))
     thread.start()
   }
 
@@ -103,20 +113,24 @@ object Queuer {
   private val log = Logger.getLogger(this.toString)
 }
 
-class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observation]) extends Runnable {
+class Queuer(val db:MongoDB, val url: String, val queue:LinkedBlockingQueue[Observation]) extends Runnable {
   private var stations:MongoCollection = null
   private var coll:MongoCollection = null
+  private val cache = new util.HashMap[String, util.List[String]]()
+  private val stationCache = new util.HashMap[DBObject, DBObject]()
 
   def run() {
     stations = db("stations")
     coll = db("observations")
-    while (true) {
-      Helper.recursiveListFiles(dir).filter(_.getName.matches("\\d{6}-\\d{5}-\\d{4}")).foreach(f => enqueue(f))
-    }
+    //while (true) {
+    //  Helper.recursiveListFiles(dir).filter(_.getName.matches("\\d{6}-\\d{5}-\\d{4}")).foreach(f => enqueue(f))
+    //}
+    while (true) { enqueue(url) }
   }
 
-  def enqueue(file: File) {
-    val nameComponents = file.getName.split("-")
+  def enqueue(url: String) {
+    val file = url.split("/")(3)
+    val nameComponents = file.split("-")
     if (nameComponents.length != 3) {
       Queuer.log.error("ISD file name should fit the format <USAF>-<WBAN>-<year>")
     } else {
@@ -127,15 +141,42 @@ class Queuer(val db:MongoDB, val dir: File, val queue:LinkedBlockingQueue[Observ
 
       val id = MongoDBObject("_id" -> 1)
 
-      stations.findOne(key, id) match {
-        case Some(found) =>
-          io.Source.fromInputStream(new FileInputStream(file)).getLines().foreach(line => {
-            queue.put(new Observation(usaf, wban, line, found))
-          })
-        case None =>
-          Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
-          return
+      if (!stationCache.containsKey(key)) {
+        stations.findOne(key, id) match {
+          case Some(station) =>
+            stationCache.put(key, station)
+          case None =>
+            Queuer.log.error("couldn't find station usaf %s wban %s ".format(usaf, wban))
+            return
+        }
       }
+
+      val found = stationCache.get(key)
+
+      val client = new DefaultHttpClient()
+
+      try {
+        if (!cache.containsKey(url)) {
+          val download = new HttpGet(url)
+          val entity = client.execute(download).getEntity
+          val lines = new util.ArrayList[String]()
+          io.Source.fromInputStream(entity.getContent).getLines().foreach(line => {
+            lines.add(line)
+          })
+          cache.put(url, lines)
+        }
+
+        val lines = cache.get(url)
+        lines.foreach(line => queue.put(new Observation(usaf, wban, line, found)))
+      } catch {
+        case ex:HttpHostConnectException =>
+          println("Connection error: " + ex.getMessage)
+        case ex:Exception =>
+          println("Oops! Exception: " + ex)
+      } finally {
+        client.getConnectionManager.shutdown()
+      }
+
     }
 
   }
@@ -157,8 +198,12 @@ class MongoUpdateBolt extends BaseRichBolt {
 
   private val dummyValue = new Values("")
 
-  override def prepare(p1: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
-    db = MongoConnection()("weathered")
+  override def prepare(conf: util.Map[_, _], p2: TopologyContext, collector: OutputCollector) {
+    val options = new MongoOptions()
+    options.connectionsPerHost = 1
+    options.threadsAllowedToBlockForConnectionMultiplier = 1
+    val addr = new ServerAddress(conf.get("mongo").asInstanceOf[String])
+    db = MongoConnection(addr, options)("weathered")
     coll = db("observations")
     _collector = collector
   }
@@ -171,7 +216,7 @@ class MongoUpdateBolt extends BaseRichBolt {
     } else {
       doUpdate(tuple.getValue(3).asInstanceOf[DBObject], list)
       _collector.ack(tuple)
-      _collector.emit(dummyValue)
+      //_collector.emit(dummyValue)
     }
 
   }
