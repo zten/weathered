@@ -1,4 +1,4 @@
-package weathered
+package weathered.dataload
 
 import au.com.bytecode.opencsv.CSVReader
 import java.io.{FileReader, File}

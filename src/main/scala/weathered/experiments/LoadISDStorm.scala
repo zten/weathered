@@ -1,4 +1,4 @@
-package weathered
+package weathered.experiments
 
 import org.apache.log4j.Logger
 import backtype.storm.topology.base.{BaseRichBolt, BaseRichSpout}

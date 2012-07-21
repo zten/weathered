@@ -1,4 +1,4 @@
-package weathered
+package weathered.dataload
 
 import com.mongodb.casbah.Imports._
 import java.io.FileInputStream
@@ -50,6 +50,7 @@ case class IndexFile(file:File) extends IndexingCommand
 case object IndexedAFile extends IndexingCommand
 
 class ListeningActor extends Actor {
+  val log = Logger.getLogger(this.toString)
   var count:Int = 0
   val start = System.nanoTime()
   var elapsed:Long = 0
@@ -62,9 +63,8 @@ class ListeningActor extends Actor {
           count += 1
           elapsed = System.nanoTime() - start
           if ((count % 10) == 0) {
-            println(count)
-            println("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
-            println("elapsed time: " + (elapsed / 1000000000) + " seconds")
+            log.info("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
+            log.info("elapsed time: " + (elapsed / 1000000000) + " seconds")
           }
 
         }
@@ -104,13 +104,11 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
                   } else {
                     // let's come up with a hash for the input so that we can check if we've recorded this observation
                     // already
-
-                    // Forgot months start at 0...
                     val hashCode = Hashing.sha512().newHasher()
 
                     val date = new util.GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
 
-                    val  airtemp = list(4)
+                    val airtemp = list(4)
                     val dewpointtemp = list(5)
                     val sealevelpressure = list(6)
                     val winddirection = list(7)
@@ -156,7 +154,7 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
                 listener ! IndexedAFile
               }
               case None => {
-                println("Couldn't find a station with usaf " + usaf + " and wban " + wban)
+                log.error("Couldn't find a station with usaf " + usaf + " and wban " + wban)
               }
             }
           }
