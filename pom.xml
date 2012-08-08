@@ -6,9 +6,6 @@
     <packaging>pom</packaging>
     <version>0.1-SNAPSHOT</version>
   <inceptionYear>2012</inceptionYear>
-    <modules>
-        <module>load-isd</module>
-    </modules>
     <properties>
     <scala.version>2.9.2</scala.version>
   </properties>
@@ -98,25 +95,6 @@
           <version>2.0.2</version>
       </dependency>
 
-      <dependency>
-          <groupId>com.typesafe.akka</groupId>
-          <artifactId>akka-zeromq</artifactId>
-          <version>2.0.2</version>
-      </dependency>
-
-      <dependency>
-          <groupId>storm</groupId>
-          <artifactId>storm</artifactId>
-          <version>0.7.4</version>
-          <!--<scope>provided</scope>-->
-      </dependency>
-
-      <dependency>
-          <groupId>org.apache.httpcomponents</groupId>
-          <artifactId>httpclient</artifactId>
-          <version>4.2</version>
-      </dependency>
-
   </dependencies>
 
 
@@ -149,8 +127,8 @@
                 <version>2.4</version>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>1.6</source>
-                    <target>1.6</target>
+                    <source>1.7</source>
+                    <target>1.7</target>
                 </configuration>
             </plugin>
             <plugin>
@@ -173,9 +151,6 @@
                         </goals>
                     </execution>
                 </executions>
-
-
-
             </plugin>
         </plugins>
     </build>

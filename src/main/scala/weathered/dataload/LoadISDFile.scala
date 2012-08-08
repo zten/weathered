@@ -1,16 +1,18 @@
 package weathered.dataload
 
 import com.mongodb.casbah.Imports._
-import java.io.FileInputStream
+import java.io.{InputStream, FileInputStream, File}
 import org.apache.log4j.Logger
-import java.io.File
 import java.util
 import akka.actor._
 import akka.routing.RoundRobinRouter
 import com.typesafe.config.ConfigFactory
 import com.google.common.hash.{Hashing, HashCode}
 import collection.mutable.ListBuffer
+import util.regex.Pattern
+import util.zip.GZIPInputStream
 import weathered.Helper
+import java.nio.file.FileSystems
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -19,6 +21,8 @@ import weathered.Helper
  */
 object LoadISDFile {
   val log = Logger.getLogger(this.toString)
+  val ISD_FILE_PATTERN = Pattern.compile("(\\d{6})-(\\d{5})-(\\d{4}).*")
+
 
   def main(args:Array[String]) {
     val actors = args(1).toInt
@@ -33,15 +37,21 @@ object LoadISDFile {
 
     val system = ActorSystem("system", ConfigFactory.parseFile(new File("application.conf")))
 
-    val listener = system.actorOf(Props[ListeningActor], name = "listener")
+//    val listener = system.actorOf(Props[ListeningActor], name = "listener")
 
     println("Initializing with " + actors + " actor(s)")
-    val workers = system.actorOf(Props(new ISDIndexActor(listener)).withRouter(RoundRobinRouter(actors)).
+    val workers = system.actorOf(Props(new ISDIndexActor(null)).withRouter(RoundRobinRouter(actors)).
       withDispatcher("custom-dispatch"), name = "workers")
 
-    do {
-      Helper.recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
-    } while (loop)
+//    do {
+//      Helper.recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
+//    } while (loop)
+
+    // Initialize directory change monitor
+    val path = FileSystems.getDefault.getPath(args(0))
+    val watcher = new MonitorDirectory(path, ISD_FILE_PATTERN, workers)
+    val thread = new Thread(watcher)
+    thread.start()
 
   }
 }
@@ -49,29 +59,6 @@ object LoadISDFile {
 sealed trait IndexingCommand
 case class IndexFile(file:File) extends IndexingCommand
 case object IndexedAFile extends IndexingCommand
-
-class ListeningActor extends Actor {
-  val log = Logger.getLogger(this.toString)
-  var count:Int = 0
-  val start = System.nanoTime()
-  var elapsed:Long = 0
-
-  protected def receive = {
-    case command:IndexingCommand =>
-      command match {
-        case IndexFile(f) =>
-        case IndexedAFile => {
-          count += 1
-          elapsed = System.nanoTime() - start
-          if ((count % 10) == 0) {
-            log.info("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
-            log.info("elapsed time: " + (elapsed / 1000000000) + " seconds")
-          }
-
-        }
-      }
-  }
-}
 
 class ISDIndexActor(val listener:ActorRef) extends Actor {
   val log = Logger.getLogger(this.toString)
@@ -84,18 +71,25 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
     case command:IndexingCommand =>
       command match {
         case IndexFile(f) => {
-          val nameComponents = f.getName.split("-")
-          if (nameComponents.length != 3) {
-            println("ISD file name should fit the format <USAF>-<WBAN>-<year>")
+          val matcher = LoadISDFile.ISD_FILE_PATTERN.matcher(f.getName)
+          if (!matcher.matches()) {
+            log.error("tried processing " + f.getName + " which doesn't fit ISD filename format")
           } else {
-            val usaf = nameComponents(0)
-            val wban = nameComponents(1)
-            val year = nameComponents(2)
+            val usaf = matcher.group(1)
+            val wban = matcher.group(2)
+            val year = matcher.group(3)
             stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
               case Some(x) => {
                 val station = x
 
                 val docs = new ListBuffer[DBObject]
+
+                var is:InputStream = null
+                if (f.getName.endsWith(".gz")) {
+                  is = new GZIPInputStream(new FileInputStream(f))
+                } else {
+                  is = new FileInputStream(f)
+                }
 
                 io.Source.fromInputStream(new FileInputStream(f)).getLines().foreach(line => {
                   val list = line.split("\\s+").map(s => Integer.valueOf(s))
@@ -152,7 +146,7 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
 
                 coll.insert(docs.toList)
 
-                listener ! IndexedAFile
+                //listener ! IndexedAFile
               }
               case None => {
                 log.error("Couldn't find a station with usaf " + usaf + " and wban " + wban)
@@ -166,3 +160,26 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
     }
   }
 }
+
+//class ListeningActor extends Actor {
+//  val log = Logger.getLogger(this.toString)
+//  var count:Int = 0
+//  val start = System.nanoTime()
+//  var elapsed:Long = 0
+//
+//  protected def receive = {
+//    case command:IndexingCommand =>
+//      command match {
+//        case IndexFile(f) =>
+//        case IndexedAFile => {
+//          count += 1
+//          elapsed = System.nanoTime() - start
+//          if ((count % 10) == 0) {
+//            log.info("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
+//            log.info("elapsed time: " + (elapsed / 1000000000) + " seconds")
+//          }
+//
+//        }
+//      }
+//  }
+//}
