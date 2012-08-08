@@ -1,13 +1,8 @@
 weathered
 =========
 
-ISD lite parsing
+An attempt by me (zten) and iann to do something fun with weather data from NOAA in the ISD-Lite file format.
 
-Versions
-========
+For information about the format, and links to the weather data itself, check out http://www.ncdc.noaa.gov/oa/climate/isd/index.php?name=isd-lite
 
-1. Using Akka Actors
-
-2. Using Storm
-
-Invoked with: mvn compile exec:java -Dexec.classpathScope=compile -Dexec.mainClass=weathered.LoadISDStorm -Dweathered.dataDir=testdata -Dlog4j.configuration=log4j.xml
+Currently in development is the back-end support for mirroring the weather data and loading it into MongoDB. After that, we hope to do some fun visualization work and present it to people as a webapp.
