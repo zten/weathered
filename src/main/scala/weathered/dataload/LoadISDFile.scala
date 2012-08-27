@@ -25,15 +25,12 @@ object LoadISDFile {
 
 
   def main(args:Array[String]) {
-    val actors = args(1).toInt
-    var loop = false
-
     if (args.length == 0 || args.length == 1) {
       println("need to specify a filename for an ISD lite folder, and a number of actors")
       System.exit(1)
     }
 
-    if (args.length == 3) loop = args(2).toBoolean
+    val actors = args(1).toInt
 
     val system = ActorSystem("system", ConfigFactory.parseFile(new File("application.conf")))
 
