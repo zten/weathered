@@ -2,9 +2,10 @@ package weathered.dataload
 
 import au.com.bytecode.opencsv.CSVReader
 import java.io.{FileReader, File}
-import com.mongodb.casbah.MongoConnection
+import com.mongodb.casbah.{MongoURI, MongoConnection}
 import com.mongodb.casbah.Imports._
 import org.apache.log4j.Logger
+import java.util
 
 /**
  * Reads CSV and creates collection of stations
@@ -28,32 +29,45 @@ object LoadStations {
       System.exit(1)
     }
 
-    val mongo = MongoConnection()
-    val db = mongo("weathered")
-    val coll = db("stations")
+    val config = new util.Properties()
+    val resource = this.getClass.getClassLoader.getResourceAsStream("database.properties")
+    if (resource != null) {
+      // can give ourselves the opportunity to just pass the relevant properties as a JVM arg
+      config.load(resource)
+    }
 
-    var row = 0
+    val uri = MongoURI(config.getProperty("mongodb.uri", ""))
 
-    CSVWrapper.iterate(inputFile).foreach(arr => {
-      if (row != 0) {
-        // skip headers
-        val station = MongoDBObject.newBuilder
-        station += "usaf" -> arr(0)
-        station += "wban" -> arr(1)
-        station += "name" -> arr(2)
-        station += "country" -> arr(3)
-        station += "fipsCountry" -> arr(4)
-        station += "state" -> arr(5)
-        station += "callsign" -> arr(6)
-        station += "location" -> (parseNumber(arr(7), 1000), parseNumber(arr(8), 1000))
-        station += "elevation" -> arr(9)
-        coll.save(station.result())
-      }
+    uri.connectDB match {
+      case Left(t) =>
+        log.error("Couldn't connect to db", t)
+        System.exit(-1)
+      case Right(db) =>
+        val coll = db("stations")
 
-      row += 1
-    })
+        var row = 0
 
-    log.info("stations loaded")
+        CSVWrapper.iterate(inputFile).foreach(arr => {
+          if (row != 0) {
+            // skip headers
+            val station = MongoDBObject.newBuilder
+            station += "usaf" -> arr(0)
+            station += "wban" -> arr(1)
+            station += "name" -> arr(2)
+            station += "country" -> arr(3)
+            station += "fipsCountry" -> arr(4)
+            station += "state" -> arr(5)
+            station += "callsign" -> arr(6)
+            station += "location" -> (parseNumber(arr(7), 1000), parseNumber(arr(8), 1000))
+            station += "elevation" -> arr(9)
+            coll.save(station.result())
+          }
+
+          row += 1
+        })
+
+        log.info("stations loaded")
+    }
 
   }
 

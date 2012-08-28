@@ -8,11 +8,11 @@ import akka.actor._
 import akka.routing.RoundRobinRouter
 import com.typesafe.config.ConfigFactory
 import com.google.common.hash.{Hashing, HashCode}
-import collection.mutable.ListBuffer
+import collection.mutable.{ArrayBuffer, ListBuffer}
 import util.regex.Pattern
 import util.zip.GZIPInputStream
-import weathered.Helper
 import java.nio.file.FileSystems
+import com.mongodb.casbah.MongoURI
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -23,8 +23,7 @@ object LoadISDFile {
   val log = Logger.getLogger(this.toString)
   val ISD_FILE_PATTERN = Pattern.compile("(\\d{6})-(\\d{5})-(\\d{4}).*")
 
-
-  def main(args:Array[String]) {
+  def main(args: Array[String]) {
     if (args.length == 0 || args.length == 1) {
       println("need to specify a filename for an ISD lite folder, and a number of actors")
       System.exit(1)
@@ -32,40 +31,50 @@ object LoadISDFile {
 
     val actors = args(1).toInt
 
-    val system = ActorSystem("system", ConfigFactory.parseFile(new File("application.conf")))
+    val system = ActorSystem("system", ConfigFactory.parseFile(new File("akka-application.conf")))
 
-//    val listener = system.actorOf(Props[ListeningActor], name = "listener")
+    log.info("Initializing with " + actors + " actor(s)")
 
-    println("Initializing with " + actors + " actor(s)")
-    val workers = system.actorOf(Props(new ISDIndexActor(null)).withRouter(RoundRobinRouter(actors)).
-      withDispatcher("custom-dispatch"), name = "workers")
+    val config = new util.Properties()
+    val resource = this.getClass.getClassLoader.getResourceAsStream("database.properties")
+    if (resource != null) {
+      // can give ourselves the opportunity to just pass the relevant properties as a JVM arg
+      config.load(resource)
+    }
 
-//    do {
-//      Helper.recursiveListFiles(new File(args(0))).foreach(f => workers ! IndexFile(f))
-//    } while (loop)
+    val uri = MongoURI(config.getProperty("mongodb.uri", ""))
 
-    // Initialize directory change monitor
-    val path = FileSystems.getDefault.getPath(args(0))
-    val watcher = new MonitorDirectory(path, ISD_FILE_PATTERN, workers)
-    val thread = new Thread(watcher)
-    thread.start()
+    uri.connectDB match {
+      case Left(t) =>
+        log.error("Couldn't connect to db", t)
+        System.exit(-1)
+      case Right(db) =>
+        val workers = system.actorOf(Props(new ISDIndexActor(db)).withRouter(RoundRobinRouter(actors)).
+          withDispatcher("custom-dispatch"), name = "workers")
+
+        val path = FileSystems.getDefault.getPath(args(0))
+        val watcher = new MonitorDirectory(path, ISD_FILE_PATTERN, workers)
+        val thread = new Thread(watcher)
+        thread.start()
+    }
 
   }
 }
 
 sealed trait IndexingCommand
-case class IndexFile(file:File) extends IndexingCommand
+
+case class IndexFile(file: File) extends IndexingCommand
+
 case object IndexedAFile extends IndexingCommand
 
-class ISDIndexActor(val listener:ActorRef) extends Actor {
+class ISDIndexActor(val db: MongoDB) extends Actor {
   val log = Logger.getLogger(this.toString)
-  val db = MongoConnection()("weathered")
   val stations = db("stations")
   val coll = db("observations")
   log.info(self.toString() + " created")
 
   protected def receive = {
-    case command:IndexingCommand =>
+    case command: IndexingCommand =>
       command match {
         case IndexFile(f) => {
           val matcher = LoadISDFile.ISD_FILE_PATTERN.matcher(f.getName)
@@ -79,9 +88,9 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
               case Some(x) => {
                 val station = x
 
-                val docs = new ListBuffer[DBObject]
+                val docs = MongoDBList()
 
-                var is:InputStream = null
+                var is: InputStream = null
                 if (f.getName.endsWith(".gz")) {
                   is = new GZIPInputStream(new FileInputStream(f))
                 } else {
@@ -141,9 +150,7 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
                   }
                 })
 
-                coll.insert(docs.toList)
-
-                //listener ! IndexedAFile
+                coll.insert(docs)
               }
               case None => {
                 log.error("Couldn't find a station with usaf " + usaf + " and wban " + wban)
@@ -154,29 +161,6 @@ class ISDIndexActor(val listener:ActorRef) extends Actor {
 
         case IndexedAFile =>
 
-    }
+      }
   }
 }
-
-//class ListeningActor extends Actor {
-//  val log = Logger.getLogger(this.toString)
-//  var count:Int = 0
-//  val start = System.nanoTime()
-//  var elapsed:Long = 0
-//
-//  protected def receive = {
-//    case command:IndexingCommand =>
-//      command match {
-//        case IndexFile(f) =>
-//        case IndexedAFile => {
-//          count += 1
-//          elapsed = System.nanoTime() - start
-//          if ((count % 10) == 0) {
-//            log.info("avg files per second: " + (count.toDouble / (elapsed.toDouble / 1000000000.toDouble)))
-//            log.info("elapsed time: " + (elapsed / 1000000000) + " seconds")
-//          }
-//
-//        }
-//      }
-//  }
-//}
