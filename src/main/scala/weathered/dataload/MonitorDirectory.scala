@@ -49,7 +49,7 @@ class MonitorDirectory(val path:Path, val pattern:Pattern, val indexer:ActorRef)
                 } else {
                   val m = pattern.matcher(file.getName)
                   if (m.matches()) {
-                    indexer ! IndexFile(p.toFile)
+                    indexer ! IndexFile(file)
                   }
                 }
 

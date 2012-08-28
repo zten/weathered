@@ -4,7 +4,7 @@
   <groupId>weathered</groupId>
   <artifactId>weathered</artifactId>
     <packaging>jar</packaging>
-    <version>0.1-SNAPSHOT</version>
+    <version>0.1</version>
   <inceptionYear>2012</inceptionYear>
     <properties>
     <scala.version>2.9.2</scala.version>
