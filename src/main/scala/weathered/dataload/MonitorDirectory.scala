@@ -35,31 +35,40 @@ class MonitorDirectory(val path:Path, val pattern:Pattern, val indexer:ActorRef)
         }
 
         key.pollEvents().foreach(
-          e =>
-            e.context() match {
-              case p:Path =>
-                val fullPath = Paths.get(basePath.toString, p.toString)
-                log.info("Event triggered for path " + fullPath.toString + "; event: " + e.kind().toString)
-                val file = fullPath.toFile
-                if (file.isDirectory) {
-                  if (e.kind().equals(StandardWatchEventKinds.ENTRY_CREATE)) {
-                    log.info("Registering path " + fullPath.toString)
-                    fullPath.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY)
+          e => {
+            if (e.context() != null) {
+              e.context() match {
+                case p:Path =>
+                  val fullPath = Paths.get(basePath.toString, p.toString)
+                  log.info("Event triggered for path " + fullPath.toString + "; event: " + e.kind().toString)
+                  val file = fullPath.toFile
+                  if (file.isDirectory) {
+                    if (e.kind().equals(StandardWatchEventKinds.ENTRY_CREATE)) {
+                      log.info("Registering path " + fullPath.toString)
+                      fullPath.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY)
+                    }
+                  } else {
+                    val m = pattern.matcher(file.getName)
+                    if (m.matches()) {
+                      indexer ! IndexFile(file)
+                    }
                   }
-                } else {
-                  val m = pattern.matcher(file.getName)
-                  if (m.matches()) {
-                    indexer ! IndexFile(file)
-                  }
-                }
 
+              }
+            } else {
+              log.warn("event context null; event kind: " + e.kind().toString)
             }
+
+          }
         )
 
         key.reset()
       }
     } catch {
-      case ex:Exception => log.error(ex)
+      case ex:Exception => {
+        log.error(ex)
+        log.error(ex.getStackTraceString)
+      }
     }
   }
 }

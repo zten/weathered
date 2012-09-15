@@ -88,7 +88,7 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
               case Some(x) => {
                 val station = x
 
-                val docs = MongoDBList()
+                val docs = ListBuffer[DBObject]()
 
                 var is: InputStream = null
                 if (f.getName.endsWith(".gz")) {
@@ -97,7 +97,7 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                   is = new FileInputStream(f)
                 }
 
-                io.Source.fromInputStream(new FileInputStream(f)).getLines().foreach(line => {
+                io.Source.fromInputStream(is).getLines().foreach(line => {
                   val list = line.split("\\s+").map(s => Integer.valueOf(s))
 
                   if (list.length != 12) {
@@ -150,7 +150,7 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                   }
                 })
 
-                coll.insert(docs)
+                coll.insert(docs:_*)
               }
               case None => {
                 log.error("Couldn't find a station with usaf " + usaf + " and wban " + wban)

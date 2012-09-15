@@ -46,7 +46,7 @@
       <dependency>
           <groupId>com.google.guava</groupId>
           <artifactId>guava</artifactId>
-          <version>12.0.1</version>
+          <version>13.0.1</version>
       </dependency>
 
       <dependency>
@@ -143,8 +143,8 @@
                 </configuration>
                 <executions>
                     <execution>
-                        <id>make-assembly</id> <!-- this is used for inheritance merges -->
-                        <phase>package</phase> <!-- bind to the packaging phase -->
+                        <id>make-assembly</id> 
+                        <phase>package</phase> 
                         <goals>
                             <goal>single</goal>
                         </goals>
