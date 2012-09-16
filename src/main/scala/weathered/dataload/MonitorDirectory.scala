@@ -24,7 +24,7 @@ class MonitorDirectory(val path:Path, val pattern:Pattern, val indexer:ActorRef)
       val watcher = path.getFileSystem.newWatchService()
       val directories = FileUtils.listFilesAndDirs(path.toFile, FalseFileFilter.FALSE, TrueFileFilter.TRUE)
       for (val d <- directories) {
-        log.info("Registering path " + d.toString)
+        log.debug("Registering path " + d.toString)
         d.toPath.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY)
       }
 
@@ -40,11 +40,11 @@ class MonitorDirectory(val path:Path, val pattern:Pattern, val indexer:ActorRef)
               e.context() match {
                 case p:Path =>
                   val fullPath = Paths.get(basePath.toString, p.toString)
-                  log.info("Event triggered for path " + fullPath.toString + "; event: " + e.kind().toString)
+                  log.debug("Event triggered for path " + fullPath.toString + "; event: " + e.kind().toString)
                   val file = fullPath.toFile
                   if (file.isDirectory) {
                     if (e.kind().equals(StandardWatchEventKinds.ENTRY_CREATE)) {
-                      log.info("Registering path " + fullPath.toString)
+                      log.debug("Registering path " + fullPath.toString)
                       fullPath.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY)
                     }
                   } else {
@@ -55,8 +55,6 @@ class MonitorDirectory(val path:Path, val pattern:Pattern, val indexer:ActorRef)
                   }
 
               }
-            } else {
-              log.warn("event context null; event kind: " + e.kind().toString)
             }
 
           }

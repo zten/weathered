@@ -97,12 +97,17 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                   is = new FileInputStream(f)
                 }
 
+                var totalObservations = 0
+                var newObservations = 0
+
+                val pre = System.nanoTime()
                 io.Source.fromInputStream(is).getLines().foreach(line => {
                   val list = line.split("\\s+").map(s => Integer.valueOf(s))
 
                   if (list.length != 12) {
                     log.error("there should be exactly 12 observations, offending file: " + f.getName)
                   } else {
+                    totalObservations += 1
                     // let's come up with a hash for the input so that we can check if we've recorded this observation
                     // already
                     val hashCode = Hashing.sha512().newHasher()
@@ -118,19 +123,20 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                     val liquidprecipdepth_hour = list(10)
                     val liquidprecipdepth_sixhour = list(11)
 
-                    hashCode.putLong(date.getTime).putInt(airtemp).putInt(dewpointtemp).putInt(sealevelpressure).
-                      putInt(winddirection).putInt(windspeedrate).putInt(skycondition).putInt(liquidprecipdepth_hour).
-                      putInt(liquidprecipdepth_sixhour)
+                    hashCode.putString(usaf).putString(wban).putLong(date.getTime).putInt(airtemp).
+                      putInt(dewpointtemp).putInt(sealevelpressure).putInt(winddirection).putInt(windspeedrate).
+                      putInt(skycondition).putInt(liquidprecipdepth_hour).putInt(liquidprecipdepth_sixhour)
 
                     val code = hashCode.hash().asBytes()
 
                     val hashCheck = MongoDBObject.newBuilder
                     hashCheck += "_id" -> code
 
-                    coll.findOne(hashCheck.result()) match {
+                    coll.findOne(hashCheck.result(), MongoDBObject.empty) match {
                       case Some(observation) =>
 
                       case None =>
+                        newObservations += 1
                         val docBuilder = MongoDBObject.newBuilder
                         docBuilder += "_id" -> code
                         docBuilder += "station" -> station
@@ -149,8 +155,14 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                     }
                   }
                 })
+                val post = (System.nanoTime() - pre)/1000000
 
+                val preInsert = System.nanoTime()
                 coll.insert(docs:_*)
+                val postInsert = (System.nanoTime() - preInsert)/1000000
+
+                log.info("USAF %s WBAN %s year %s data updated, %d observations total, %d new - %dms reconciling, %dms inserting".
+                  format(usaf, wban, year, totalObservations, newObservations, post, postInsert))
               }
               case None => {
                 log.error("Couldn't find a station with usaf " + usaf + " and wban " + wban)
