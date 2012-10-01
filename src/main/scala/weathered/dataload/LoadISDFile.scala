@@ -15,6 +15,7 @@ import util.zip.{ZipException, GZIPInputStream}
 import java.nio.file.FileSystems
 import com.mongodb.casbah.MongoURI
 import collection.mutable
+import org.bson.types.Binary
 
 /**
  * Entry point for the most fantabulous ISD lite parsing and indexing app ever.
@@ -25,6 +26,13 @@ object LoadISDFile {
   val log = Logger.getLogger(this.toString)
   val ISD_FILE_PATTERN = Pattern.compile("(\\d{6})-(\\d{5})-(\\d{4}).*")
   val retry = new DelayQueue[DelayedFile]()
+
+  implicit def enrichMongoDBObject(xs: DBObject) = {
+    val upgraded = new WeatherObject()
+    upgraded.putAll(xs)
+
+    upgraded
+  }
 
   def main(args: Array[String]) {
     if (args.length == 0 || args.length == 1) {
@@ -68,6 +76,11 @@ object LoadISDFile {
   }
 }
 
+/**
+ * Helper thread that provides a re-queuing mechanism if the file isn't immediately readable.
+ *
+ * @param indexer A reference to our dispatcher actor.
+ */
 class RequeueAgent(indexer:ActorRef) extends Runnable {
   def run() {
     while (true) {
@@ -103,6 +116,13 @@ sealed trait IndexingResponse
 
 case class IndexedAFile(file: File) extends IndexingResponse
 
+/**
+ * It was simpler to implement a dispatcher as another actor since this system
+ * requires us to talk back to the dispatcher when work is finished. Of course,
+ * this isn't robust, and requires the actors to not fail (otherwise files will get 'stuck').
+ *
+ * @param workers The actor worker pool that will do the work, if this actor determines it's okay to pass on a message.
+ */
 class IndexDispatcher(val workers:ActorRef) extends Actor {
   private val fileSet:mutable.Set[File] = mutable.Set()
   protected def receive = {
@@ -127,11 +147,98 @@ class IndexDispatcher(val workers:ActorRef) extends Actor {
   }
 }
 
+/**
+ * Helper class for making weather objects comparable.
+ */
+class WeatherObject extends MongoDBObject {
+  override def equals(that: Any) = {
+    that match {
+      case o:WeatherObject =>
+        val us = this.getFullHash
+        val them = o.getFullHash
+        us.sameElements(them)
+      case _:AnyRef =>
+        false
+    }
+  }
+
+  override def hashCode() = {
+    getHasher.asInt()
+  }
+
+  def getFullHash = {
+    getHasher.asBytes()
+  }
+
+  def getDate = {
+    this.getAs[util.Date]("date").get
+  }
+
+  private def getHasher = {
+    val date = this.getAs[util.Date]("date").get
+    val airtemp = this.getAs[Int]("airtemp").get
+    val dewpointtemp = this.getAs[Int]("dewpointtemp").get
+    val sealevelpressure = this.getAs[Int]("sealevelpressure").get
+    val winddirection = this.getAs[Int]("winddirection").get
+    val windspeedrate = this.getAs[Int]("windspeedrate").get
+    val skycondition = this.getAs[Int]("skycondition").get
+    val liquidprecipdepth_hour = this.getAs[Int]("liquidprecipdepth_hour").get
+    val liquidprecipdepth_sixhour = this.getAs[Int]("liquidprecipdepth_sixhour").get
+
+    getHash(date.getTime, airtemp, dewpointtemp, sealevelpressure, winddirection, windspeedrate, skycondition,
+      liquidprecipdepth_hour, liquidprecipdepth_sixhour)
+  }
+
+  private def getHash(date:Long, airtemp:Int, dewpointtemp:Int, sealevelpressure:Int, winddirection:Int,
+                      windspeedrate:Int, skycondition:Int, liquidprecipdepth_hour:Int,
+                      liquidprecipdepth_sixhour:Int):HashCode = {
+    val hashCode = Hashing.sha512().newHasher()
+    hashCode.putLong(date).putInt(airtemp).
+      putInt(dewpointtemp).putInt(sealevelpressure).putInt(winddirection).putInt(windspeedrate).
+      putInt(skycondition).putInt(liquidprecipdepth_hour).putInt(liquidprecipdepth_sixhour)
+    hashCode.hash()
+  }
+}
+
+/**
+ * Implementation of actual indexing process.
+ *
+ * @param db The MongoDB database to use.
+ */
 class ISDIndexActor(val db: MongoDB) extends Actor {
   val log = Logger.getLogger(this.toString)
   val stations = db("stations")
   val coll = db("observations")
   log.info(self.toString() + " created")
+
+  private def getDBObjects(is:InputStream):List[WeatherObject] = {
+    import LoadISDFile.enrichMongoDBObject
+
+    val docs = ListBuffer[WeatherObject]()
+
+    io.Source.fromInputStream(is).getLines().foreach(line => {
+      val list = line.split("\\s+").map(s => Integer.valueOf(s))
+
+      if (list.length == 12) {
+        val date = new util.GregorianCalendar(list(0).toInt, list(1) - 1, list(2), list(3), 0).getTime
+
+        val docBuilder = MongoDBObject.newBuilder
+        docBuilder += "date" -> date
+        docBuilder += "airtemp" -> list(4)
+        docBuilder += "dewpointtemp" -> list(5)
+        docBuilder += "sealevelpressure" -> list(6)
+        docBuilder += "winddirection" -> list(7)
+        docBuilder += "windspeedrate" -> list(8)
+        docBuilder += "skycondition" -> list(9)
+        docBuilder += "liquidprecipdepth_hour" -> list(10)
+        docBuilder += "liquidprecipdepth_sixhour" -> list(11)
+
+        docs += docBuilder.result()
+      }
+    })
+
+    docs.toList
+  }
 
   protected def receive = {
     case command: IndexingCommand =>
@@ -145,11 +252,7 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
             val wban = matcher.group(2)
             val year = matcher.group(3)
             stations.findOne(MongoDBObject("usaf" -> usaf, "wban" -> wban)) match {
-              case Some(x) => {
-                val station = x
-
-                val docs = ListBuffer[DBObject]()
-
+              case Some(station) => {
                 var tempIs = new FileInputStream(f)
                 var is:InputStream = null
                 try {
@@ -161,73 +264,39 @@ class ISDIndexActor(val db: MongoDB) extends Actor {
                   tempIs = new FileInputStream(f)
                   is = new GZIPInputStream(tempIs)
 
-                  var totalObservations = 0
-                  var newObservations = 0
-
                   val pre = System.nanoTime()
-                  io.Source.fromInputStream(is).getLines().foreach(line => {
-                    val list = line.split("\\s+").map(s => Integer.valueOf(s))
 
-                    if (list.length != 12) {
-                      log.error("there should be exactly 12 observations, offending file: " + f.getName)
-                    } else {
-                      totalObservations += 1
-                      // let's come up with a hash for the input so that we can check if we've recorded this observation
-                      // already
-                      val hashCode = Hashing.sha512().newHasher()
-
-                      val date = new util.GregorianCalendar(list(0), list(1) - 1, list(2), list(3), 0).getTime
-
-                      val airtemp = list(4)
-                      val dewpointtemp = list(5)
-                      val sealevelpressure = list(6)
-                      val winddirection = list(7)
-                      val windspeedrate = list(8)
-                      val skycondition = list(9)
-                      val liquidprecipdepth_hour = list(10)
-                      val liquidprecipdepth_sixhour = list(11)
-
-                      hashCode.putString(usaf).putString(wban).putLong(date.getTime).putInt(airtemp).
-                        putInt(dewpointtemp).putInt(sealevelpressure).putInt(winddirection).putInt(windspeedrate).
-                        putInt(skycondition).putInt(liquidprecipdepth_hour).putInt(liquidprecipdepth_sixhour)
-
-                      val code = hashCode.hash().asBytes()
-
-                      val hashCheck = MongoDBObject.newBuilder
-                      hashCheck += "_id" -> code
-
-                      coll.findOne(hashCheck.result(), MongoDBObject.empty) match {
-                        case Some(observation) =>
-
-                        case None =>
-                          newObservations += 1
-                          val docBuilder = MongoDBObject.newBuilder
-                          docBuilder += "_id" -> code
-                          docBuilder += "station" -> station
-                          docBuilder += "year" -> year
-                          docBuilder += "date" -> date
-                          docBuilder += "airtemp" -> list(4)
-                          docBuilder += "dewpointtemp" -> list(5)
-                          docBuilder += "sealevelpressure" -> list(6)
-                          docBuilder += "winddirection" -> list(7)
-                          docBuilder += "windspeedrate" -> list(8)
-                          docBuilder += "skycondition" -> list(9)
-                          docBuilder += "liquidprecipdepth_hour" -> list(10)
-                          docBuilder += "liquidprecipdepth_sixhour" -> list(11)
-
-                          docs += docBuilder.result()
+                  coll.findOne(MongoDBObject("station" -> station, "year" -> year)) match {
+                    case Some(observations) =>
+                      val existing = mutable.Set[WeatherObject]()
+                      for (obj <- observations.getAs[MongoDBList]("observations").get) {
+                        existing += LoadISDFile.enrichMongoDBObject(obj.asInstanceOf[DBObject])
                       }
-                    }
-                  })
 
-                  val post = (System.nanoTime() - pre)/1000000
+                      val allObservations = getDBObjects(is)
+                      val difference = allObservations.toSet -- existing
+                      val newObservations = difference.size
 
-                  val preInsert = System.nanoTime()
-                  coll.insert(docs:_*)
-                  val postInsert = (System.nanoTime() - preInsert)/1000000
+                      // date sort order was destroyed, frustratingly.
+                      val toSave = difference.toList.sortBy(k => k.getDate)
 
-                  log.info("USAF %s WBAN %s year %s data updated, %d observations total, %d new - %dms reconciling, %dms inserting".
-                    format(usaf, wban, year, totalObservations, newObservations, post, postInsert))
+                      toSave.foreach(x => coll.update(observations, $push("observations" -> x)))
+
+                      val post = (System.nanoTime() - pre)/1000000
+                      log.info("Updated record for USAF %s WBAN %s for year %s in %dms (%d new observations)".
+                        format(usaf, wban, year, post, newObservations))
+
+                    case None =>
+                      val builder = MongoDBObject.newBuilder
+                      builder += "station" -> station
+                      builder += "year" -> year
+                      val observations = getDBObjects(is)
+                      builder += "observations" -> observations
+                      coll.save(builder.result())
+                      val post = (System.nanoTime() - pre)/1000000
+                      log.info("Created record for USAF %s WBAN %s for year %s in %dms (%d observations)".
+                        format(usaf, wban, year, post, observations.size))
+                  }
                 } catch {
                   case ze:ZipException => {
                     LoadISDFile.retry.offer(new DelayedFile(f, 5, TimeUnit.SECONDS))
