@@ -58,7 +58,11 @@ object LoadStations {
             station += "fipsCountry" -> arr(4)
             station += "state" -> arr(5)
             station += "callsign" -> arr(6)
-            station += "location" -> (parseNumber(arr(7), 1000), parseNumber(arr(8), 1000))
+            val lat = parseNumber(arr(7), 1000)
+            val lon = parseNumber(arr(8), 1000)
+            if ((lat >= -180 && lat <= 180) && (lon >= -180 && lon <= 180)) {
+              station += "location" -> (lat, lon)
+            }
             station += "elevation" -> arr(9)
             coll.save(station.result())
           }
