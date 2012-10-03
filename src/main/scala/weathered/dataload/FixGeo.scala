@@ -56,7 +56,7 @@ object FixGeo {
             val lon = parseNumber(arr(8), 1000)
             if ((lat >= -180 && lat <= 180) && (lon >= -180 && lon <= 180)) {
               coll.update(MongoDBObject("usaf" -> arr(0), "wban" -> arr(1)),
-                MongoDBObject("$set" -> ("location" -> (lat, lon))))
+                $set ("location" -> (lat, lon)))
             }
           }
 
