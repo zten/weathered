@@ -1,0 +1,9 @@
+{
+    "name": "weathered-visualizations",
+    "version": "0.1.0",
+    "main": "site/scripts/main.js",
+    "dependencies": {
+        "jquery": "1.8.3",
+        "d3.js": "2.10.3"
+    }
+}
