@@ -13,4 +13,6 @@ project/plugins/project/
 .scala_dependencies
 .idea/*
 *.iml
+*.ipr
+*.iws
 *.un*
