@@ -14,7 +14,9 @@ db.open(function (err, db) {
 	console.log('Listening on port 9090.');	
 })
 
-app.use(express.static('site-build'));
+app.use(express.static('site'));
+
+app.use('/scripts/components', express.static('components'));
 
 app.get('/stations', function (req, res) {
 	db.collection('stations', function (err, coll) {

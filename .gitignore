@@ -1,6 +1,11 @@
 *.class
 *.log
 
+server/components/
+
+node_modules/
+site-build/
+
 # sbt specific
 dist/*
 target/
