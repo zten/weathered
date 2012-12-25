@@ -23,7 +23,7 @@ app.get('/stations', function (req, res) {
 		if (err) {
 			res.json(500, err);
 		} else {
-			coll.find({location: {$ne: null}, country: "US"}).toArray(function (err, items) {
+			coll.find({location: {$ne: null}}).toArray(function (err, items) {
 				if (err) {
 					res.json(500, err);
 				} else {
